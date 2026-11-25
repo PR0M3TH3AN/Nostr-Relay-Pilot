@@ -1,4 +1,4 @@
-# RelayPilot 0.2.2
+# RelayPilot 0.3.0
 
 Local-first Nostr relay configuration utility. Static delivery, no backend or analytics. Node.js 22+ is required for development.
 
@@ -46,7 +46,21 @@ NIP-42 authentication is opt-in. A challenge alone never triggers a signature: a
 
 Discovery cannot prove that the newest metadata was found everywhere. Add known relays before analysis. The original archive is retained in this tab across publishing and later scans; keep its downloaded copy before closing the page. It backs up published relay configuration, not private keys, messages, client-local preferences or your entire note history.
 
-Historical note migration/rebroadcast, NIP-46 and continuous monitoring are not implemented. Changing relay lists does not copy old notes.
+## Migrate from an old relay backup
+
+Section 05 copies original signed public notes from your old relays to your current published outbox relays:
+
+1. Connect your npub (sufficient for ordinary public notes) or signer if your relays require authentication.
+2. **Import old relay backup**. This accepts the downloaded signed kind-10002 event, RelayPilot configuration backup, or the broad signed public archive. It uses the old NIP-65 read/write URLs only as sources. It does not restore or publish old configuration and does not pull from encrypted private, DM or search relay lists.
+3. **Load current targets** fetches your latest published kind-10002 event and selects its write/both relays. Staged recommendations and the imported old list do not select targets. Sources and targets are displayed separately.
+4. **Collect & preview notes** fetches your signed kind-1 notes/replies and, optionally, kind-30023 articles. It deduplicates event IDs, retains the latest retrieved article per address, and excludes protected events, expired events, future-dated events, and notes covered by recovered author-signed deletion requests. Configuration, DMs and private data are not migrated.
+5. Inspect each source's collection status and **Download collected archive**. Collection is bounded at 10,000 retained note/deletion records, 250 queries and 32 MB across the scan. A short page does not mean complete history. NIP-67 hints qualify completeness when available; missing hints, caps, failed queries and unresolvable timestamp boundaries are reported as incomplete. Valid partial responses are retained. Nothing can recover events the sources no longer retain or disclose deletion requests that no source returns.
+6. Review the source and target lists, check approval, and **Copy & verify every target**. Targets are refreshed immediately before copying; a changed target set requires fresh approval. A local collected-note archive download is requested before any writes.
+7. Review per-target results and download the delivery report. Already-present event IDs are skipped on write. Every planned original ID is queried again on every target, with signature/author validation. An acknowledgment alone never counts as verified delivery. Missing IDs, rejections and query errors appear in the report. All-delivered status applies only to collected eligible events on all targets at verification time; source completeness and future retention remain separate.
+
+**Stop migration** aborts in-flight connections and prevents further requests. Partial results and reports remain downloadable. Keep the browser tab open during collection/copy; this static app does not run a background job after the tab closes. After stopping or a partial failure, the same plan can be approved and retried; existing verified copies are detected before writes.
+
+Transfer currently uses NIP-01 queries/publication with bounded historical pagination and NIP-67 hints. NIP-77 negentropy optimization, NIP-46 remote signing and continuous monitoring are not implemented. Changing relay configuration alone does not copy notes; migration is a separate approved action.
 
 ## Build and test
 
@@ -56,7 +70,7 @@ npm run build
 npm run preview
 ```
 
-Tests generate disposable keys and use controlled relay/DOM fixtures. They cover role-specific evidence, authenticated request retries, signature filtering, encrypted private lists, full application publishing, partial failures, immutable signer validation, archive import and rollback. They do not assert live paid-relay membership or future retention.
+Tests generate disposable keys and use controlled relay/DOM fixtures. Migration regressions cover archive formats, separate sources/current targets, timestamp pagination, partial source recovery, deletion/expiration/protection filtering, no relay-configuration copying, cancellation, changed-target approval, and every-event/every-target signed readback. They cover role-specific evidence, authenticated request retries, signature filtering, encrypted private lists, full application publishing, partial failures, immutable signer validation, archive import and rollback. They do not assert live paid-relay membership or future retention.
 
 GitHub Pages automatically tests, builds and deploys `dist/` after pushes to `main`. Pull requests run checks without publishing. Vite uses relative asset URLs for the repository Pages path. No third-party application scripts or analytics are loaded by the site.
 

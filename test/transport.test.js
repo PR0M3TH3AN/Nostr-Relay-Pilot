@@ -287,3 +287,20 @@ test('query event limits remain bounded when a relay ignores the requested limit
   const result=await query(url,{kinds:[1],limit:2},setup);
   assert.equal(result.ok,true);assert.equal(result.events.length,2);cleaned(setup.instances[0]);
 });
+
+test('EOSE completeness hints and local truncation are preserved for migration',async()=>{
+  const setup=fixture((ws,frame)=>{
+    ws.emit(['EVENT',frame[1],event()]);ws.emit(['EVENT',frame[1],event({created_at:101})]);
+    ws.emit(['EOSE',frame[1],['finish','auth','unknown']]);
+  });
+  const result=await query(url,{kinds:[1],limit:1},setup);
+  assert.deepEqual(result.hints,['finish','auth']);assert.equal(result.truncated,true);assert.equal(result.events.length,1);
+});
+
+test('canceling a migration closes pending sockets and prevents future sends',async()=>{
+  const controller=new AbortController();const setup=fixture(()=>{});
+  const pending=query(url,{kinds:[1]},{...setup,signal:controller.signal});
+  await new Promise(resolve=>setImmediate(resolve));controller.abort();
+  const result=await pending;assert.equal(result.aborted,true);assert.equal(result.ok,false);cleaned(setup.instances[0]);
+  const never=fixture(()=>{});await query(url,{kinds:[1]},{...never,signal:controller.signal});assert.equal(never.instances.length,0);
+});

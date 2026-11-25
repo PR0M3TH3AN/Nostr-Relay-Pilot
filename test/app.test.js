@@ -223,3 +223,15 @@ test('unavailable default is not selected or silently substituted for an existin
   assert.equal(f.app.getState().current[10013].id,f.original.find(e=>e.kind===10013).id);
   assert.ok(!f.writes.some(e=>e.kind===10013));f.key.fill(0);
 });
+
+test('main application imports only migration sources and refreshes its own published write targets',async()=>{
+  const f=setup();f.app.connectKey(nip19.npubEncode(f.pub));
+  const original=f.original.find(event=>event.kind===10002);
+  f.app.migration.importSourceBackup(original);await f.app.migration.loadTargets();
+  assert.deepEqual(f.app.migration.getState().sources,['wss://a.example.com/','wss://other.example.org/']);
+  assert.deepEqual(f.app.migration.getState().targets,['wss://a.example.com/','wss://other.example.org/']);
+  assert.equal(f.writes.length,0);assert.equal(f.app.getState().current[10002].id,original.id);
+  f.transport.query=async url=>({url,ok:false,events:[],reason:'Timeout'});
+  await f.app.migration.loadTargets();assert.match(f.$('migration-status').textContent,/Could not fetch/);
+  f.app.reset();assert.deepEqual(f.app.migration.getState().sources,[]);f.key.fill(0);
+});

@@ -2,6 +2,7 @@ import { nip19, nip44, getPublicKey, finalizeEvent, verifyEvent } from 'nostr-to
 import { normalize, unique, latest } from './engine.js';
 import { ROLES, KINDS, DEFAULT_PRIVATE_RELAY, isDedicatedPrivate, latestConfig, archiveFor, parseArchive, eventTemplates, restoreTemplates, roleEligibility, recommendRoles, comparison, configuredUrls } from './config.js';
 import * as liveTransport from './transport.js';
+import { createMigrationUI } from './migration-ui.js';
 
 export const SEEDS = unique(['wss://relay.damus.io','wss://nos.lol','wss://relay.primal.net','wss://purplepag.es','wss://relay.nostr.band']);
 const MONITORS = unique(['wss://relay.nostr.watch','wss://relaypag.es']);
@@ -15,6 +16,7 @@ export function createApp({ doc = document, win = window, transport = liveTransp
   let rows = [], busy = false, loaded = false, follows = [], totalFollows = 0;
   let restored = null, privateBaseline = [], scanTime = null;
   const touchedKinds = new Set();
+  let migrationUI=null;
   const say = text => { $('status').textContent = text; };
   const canSign = () => !!(secret || extension);
   const enabled = () => ROLES.filter(role => $(`manage-${role}`).checked);
@@ -36,6 +38,7 @@ export function createApp({ doc = document, win = window, transport = liveTransp
     $('normal').hidden = !restored;
     $('publish').textContent = publishing ? 'Publishing…' : 'Sign & publish selected roles';
     $('publish-feedback').setAttribute('aria-busy', String(publishing));
+    migrationUI?.update();
   }
   function reset() {
     secret?.fill(0); secret=null; extension=false; pub=''; current={}; original=null; rows=[];
@@ -47,6 +50,7 @@ export function createApp({ doc = document, win = window, transport = liveTransp
     $('private-urls').value=DEFAULT_PRIVATE_RELAY;
     $('private-health').textContent='';
     for (const role of ROLES) $(`manage-${role}`).checked = ['read','write'].includes(role);
+    migrationUI?.reset();
     $('publish-feedback').hidden=true;
     $('current').textContent='Not loaded'; $('proposal').textContent='Run analysis first'; invalidate(); state();
   }
@@ -361,7 +365,21 @@ export function createApp({ doc = document, win = window, transport = liveTransp
   for(const role of ROLES)$(`manage-${role}`).onchange=()=>{preview();renderRows()};
   for(const id of ['extra','private-urls','trust-private','auth','discover'])$(id).onchange=()=>{loaded=false;invalidate();state();say('Settings changed. Analyze again before publishing.');};
   $('preset').onchange=recommend;
+  async function refreshMigrationTargets(sourceUrls,signal) {
+    if(!pub)throw Error('Connect your identity first.');
+    const urls=unique([...SEEDS,...existingUrls(),...sourceUrls]).slice(0,40);
+    const results=await transport.batch(urls,url=>transport.query(url,{authors:[pub],kinds:[10002],limit:5},{...ioOptions(),signal}));
+    if(signal?.aborted)throw Error('Canceled');
+    const fresh=latestConfig(results.flatMap(result=>result.events),pub)[10002];
+    if(!results.some(result=>result.ok)||!fresh)throw Error('Could not fetch your current signed outbox list. Try again when your relays are reachable.');
+    const newest=latestConfig([...(current[10002]?[current[10002]]:[]),fresh],pub)[10002];
+    if(newest.id!==fresh.id)throw Error('The newest known relay list could not be refreshed. Analyze again before migrating.');
+    if(current[10002]?.id!==fresh.id){current[10002]=fresh;captureBaseline();loaded=false;invalidate();showCurrent();}
+    return fresh;
+  }
+  migrationUI=createMigrationUI({doc,identity:()=>({pub}),transport,ioOptions,download,refreshTargets:refreshMigrationTargets,
+    setBusy:value=>{busy=value;state();renderRows()},isBusy:()=>busy});
   state();
-  return {connectKey,analyze,importBackup,publishPlan,decryptPrivate,report,reset,getState:()=>({pub,current,original,rows,loaded,restored,busy})};
+  return {migration:migrationUI,connectKey,analyze,importBackup,publishPlan,decryptPrivate,report,reset,getState:()=>({pub,current,original,rows,loaded,restored,busy})};
 }
 if(typeof document!=='undefined')createApp();

@@ -73,5 +73,38 @@
   <p class="muted">Publishing first downloads the original archive and all signed updates. Each list publishes separately, so partial success is possible. Rollback imports the original signed backup and re-signs its contents with a newer timestamp. Importing a backup alone makes no network changes.</p>
   <div id="outcomes" role="status"></div>
 </section>
-<footer>RelayPilot / v0.2.2 • Static site • No telemetry • NIP-07 / 11 / 17 / 37 / 42 / 44 / 50 / 51 / 65 / 66</footer>
+<section id="migration-section">
+  <h2>05 — Copy your notes to your current relays</h2>
+  <p>Import your old RelayPilot backup as the source list. Your latest published outbox list supplies the destinations. These steps copy original signed public notes; they do not change your relay configuration.</p>
+  <div class="actions">
+    <label class="file-label">Import old relay backup<input id="migration-file" type="file" accept=".json,application/json" disabled></label>
+    <button id="migration-targets" class="secondary" disabled>Load current targets</button>
+  </div>
+  <div class="migration-lists">
+    <label>Pull from these old relays<textarea id="migration-sources" rows="3" readonly placeholder="Import your old signed relay backup"></textarea></label>
+    <label>Deliver to these current outbox relays<textarea id="migration-destinations" rows="3" readonly placeholder="Load your current published relay list"></textarea></label>
+  </div>
+  <label class="check"><input id="migration-articles" type="checkbox" checked> Include long-form articles alongside notes and replies.</label>
+  <p class="muted">Public content only. DMs, encrypted/private events, relay configuration, protected events, expired notes and notes covered by recovered deletion requests are excluded. Unavailable relays and missing completeness hints can leave source history incomplete. Keeping this tab open lets the operation continue; stopping preserves the results collected so far.</p>
+  <div class="actions">
+    <button id="migration-collect" disabled>Collect &amp; preview notes</button>
+    <button id="migration-archive" class="secondary" disabled>Download collected archive</button>
+  </div>
+  <div class="scroll"><table><thead><tr><th>Source relay</th><th>Events found</th><th>Scan status</th></tr></thead><tbody id="migration-source-results"></tbody></table></div>
+  <p id="migration-preview" class="muted">Connect your identity and import the old relay backup to begin.</p>
+  <label class="check"><input id="migration-approve" type="checkbox" disabled> I reviewed the source and target relays and approve copying my collected public notes to every listed target.</label>
+  <div class="actions">
+    <button id="migration-copy" disabled>Copy &amp; verify every target</button>
+    <button id="migration-stop" class="secondary" hidden>Stop migration</button>
+    <button id="migration-report" class="secondary" disabled>Download delivery report</button>
+  </div>
+  <div id="migration-feedback" class="publish-feedback" hidden aria-busy="false">
+    <p id="migration-status" role="status" aria-live="polite"></p>
+    <progress id="migration-progress" max="1" value="0" aria-label="Current migration step"></progress>
+    <p id="migration-elapsed" class="muted"></p>
+  </div>
+  <div class="scroll"><table><thead><tr><th>Target relay</th><th>Verified by readback</th><th>Missing / unverified</th><th>Write rejections</th></tr></thead><tbody id="migration-results"></tbody></table></div>
+  <p class="muted">Delivery is verified only when each original event ID can be fetched from each target with a valid signature. Relay acceptance alone is insufficient. This verifies the collected notes at the time of the check; it cannot guarantee future retention or recover notes no source relay still holds. For paid or restricted relays, enable authentication above only if you have access.</p>
+</section>
+<footer>RelayPilot / v0.3.0 • Static site • No telemetry • Migration: NIP-01 / 09 / 40 / 67 • NIP-07 / 11 / 17 / 37 / 42 / 44 / 50 / 51 / 65 / 66</footer>
 </main><script type="module" src="/src/main.js"></script></body></html>

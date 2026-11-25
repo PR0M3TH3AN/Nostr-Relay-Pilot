@@ -27,12 +27,15 @@ export function exchange(url, frame, {
   expectedPubkey = null,
   WebSocketImpl = globalThis.WebSocket,
   verify = verifyEvent,
+  signal = null,
 } = {}) {
   return new Promise(resolve => {
     const start = performance.now();
     const events = [], ids = new Set();
     const limits = Array.isArray(frame) && frame[0] === 'REQ' ? frame.slice(2).map(filter=>filter?.limit).filter(limit=>Number.isInteger(limit)&&limit>0) : [];
     const eventLimit = limits.length ? Math.min(MAX_EVENTS, limits.reduce((total,limit)=>total+limit,0)) : MAX_EVENTS;
+    let hints = [], truncated = false;
+    const onAbort = () => finish(false, 'Canceled');
     let socket, done = false, challenge = null, authPending = false;
     let authAttempted = false, authId = null, authRequired = false, authUsed = false;
     const duration = Number.isFinite(timeout) && timeout > 0 ? timeout : 5500;
@@ -42,12 +45,13 @@ export function exchange(url, frame, {
       if (done) return;
       done = true;
       clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       if (socket) {
         socket.onopen = socket.onmessage = socket.onerror = socket.onclose = null;
         try { socket.close(); } catch { /* Already closed or not connected. */ }
       }
       resolve({ url, ok, reason: String(reason).slice(0, 500), events,
-        ms: Math.round(performance.now() - start), authRequired, authUsed });
+        ms: Math.round(performance.now() - start), authRequired, authUsed, hints, truncated, aborted:signal?.aborted??false });
     }
 
     function send(message) {
@@ -105,6 +109,8 @@ export function exchange(url, frame, {
     }
 
     try {
+      if(signal?.aborted){finish(false,'Canceled');return;}
+      signal?.addEventListener('abort',onAbort,{once:true});
       if (!normalize(url)) { finish(false, 'Invalid relay URL'); return; }
       if (!Array.isArray(frame) || !['REQ', 'EVENT'].includes(frame[0])) {
         finish(false, 'Invalid relay request'); return;
@@ -136,13 +142,13 @@ export function exchange(url, frame, {
         if (authPending) return;
         if (frame[0] === 'REQ') {
           if (reference !== frame[1]) return;
-          if (type === 'EOSE') { finish(true, 'EOSE'); return; }
+          if (type === 'EOSE') { hints=Array.isArray(value)?value.filter(hint=>['finish','more','auth'].includes(hint)):[];finish(true, 'EOSE'); return; }
           if (type === 'CLOSED') { rejected(value); return; }
-          if (type === 'EVENT' && events.length < eventLimit) {
+          if (type === 'EVENT') {
             try {
               if (verify(value) && frame.slice(2).some(filter => matches(value, filter)) && !ids.has(value.id)) {
                 ids.add(value.id);
-                events.push(value);
+                if(events.length<eventLimit)events.push(value);else truncated=true;
               }
             } catch { /* Ignore malformed or unverifiable event objects. */ }
           }
