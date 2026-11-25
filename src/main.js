@@ -11,6 +11,7 @@ const roleKind = role => ({read:10002,write:10002,dm:10050,search:10007,private:
 export function createApp({ doc = document, win = window, transport = liveTransport, save, confirmAction, now = () => Math.floor(Date.now()/1000) } = {}) {
   const $ = id => doc.getElementById(id);
   let pub = '', secret = null, extension = false, current = {}, original = null;
+  let publishing = false;
   let rows = [], busy = false, loaded = false, follows = [], totalFollows = 0;
   let restored = null, privateBaseline = [], scanTime = null;
   const touchedKinds = new Set();
@@ -33,6 +34,8 @@ export function createApp({ doc = document, win = window, transport = liveTransp
     for (const role of ROLES) $(`manage-${role}`).disabled = busy || !!restored;
     $('publish').disabled = busy || !loaded || !canSign() || !$('approve').checked || (!restored && !enabled().length);
     $('normal').hidden = !restored;
+    $('publish').textContent = publishing ? 'Publishing…' : 'Sign & publish selected roles';
+    $('publish-feedback').setAttribute('aria-busy', String(publishing));
   }
   function reset() {
     secret?.fill(0); secret=null; extension=false; pub=''; current={}; original=null; rows=[];
@@ -42,6 +45,7 @@ export function createApp({ doc = document, win = window, transport = liveTransp
     for (const id of ['rows','metrics','comparison']) $(id).replaceChildren();
     $('auth').checked=false; $('discover').checked=false; $('trust-private').checked=false;
     for (const role of ROLES) $(`manage-${role}`).checked = ['read','write'].includes(role);
+    $('publish-feedback').hidden=true;
     $('current').textContent='Not loaded'; $('proposal').textContent='Run analysis first'; invalidate(); state();
   }
   function identify() { $('identity').textContent = nip19.npubEncode(pub) + (secret?' • local signing':extension?' • extension signing':' • read only'); state(); }
@@ -64,7 +68,7 @@ export function createApp({ doc = document, win = window, transport = liveTransp
     if (!verifyEvent(clean) || clean.pubkey!==pub || clean.kind!==expected.kind || clean.created_at!==expected.created_at || clean.content!==expected.content || JSON.stringify(clean.tags)!==JSON.stringify(expected.tags)) throw Error('Signer returned an unexpected event');
     return clean;
   }
-  const ioOptions = () => ({ expectedPubkey:pub, ...($('auth').checked && canSign() ? {signAuth:sign} : {}) });
+  const ioOptions = onAuth => ({ expectedPubkey:pub, ...($('auth').checked && canSign() ? {signAuth:async template=>{onAuth?.();return sign(template)}} : {}) });
   function existingUrls(events=current) {
     return unique(Object.values(events).filter(event=>event.kind!==10013).flatMap(event=>event.tags.filter(t=>['r','relay'].includes(t[0])).map(t=>t[1])));
   }
@@ -238,52 +242,103 @@ export function createApp({ doc = document, win = window, transport = liveTransp
   }
   async function publishPlan() {
     if(busy||!loaded||!canSign()||!$('approve').checked)return;
-    busy=true;state();renderRows();
+    const kindLabel = kind => ({10002:'public inbox / outbox',10050:'DM inbox',10007:'search',10013:'private storage'})[kind] ?? String(kind);
+    const feedback=$('publish-feedback'),status=$('publish-status'),detail=$('publish-detail'),meter=$('publish-progress');
+    const started=Date.now();let signerPending=false,signerStarted=0;
+    const elapsed=()=>{
+      $('publish-elapsed').textContent=`Elapsed: ${Math.floor((Date.now()-started)/1000)}s`;
+      if(signerPending && Date.now()-signerStarted>10000)detail.textContent='Still waiting for your signer. Check its extension window; pending requests time out after 60 seconds.';
+    };
+    const progress=(message,completed=0,total=1,hint='')=>{
+      status.textContent=message;detail.textContent=hint;
+      meter.max=Math.max(1,total);meter.value=completed;elapsed();
+    };
+    const log=message=>{const line=doc.createElement('div');line.textContent=message;$('outcomes').append(line)};
+    async function signerStep(task,label) {
+      signerPending=true;signerStarted=Date.now();detail.textContent=extension?`${label}: check your signer extension for an approval request.`:label;
+      let timer;
+      try{return await Promise.race([Promise.resolve().then(task),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Signer did not respond within 60 seconds. Check the extension, then review and try again.')),60000)})])}
+      finally{clearTimeout(timer);signerPending=false}
+    }
+    busy=true;publishing=true;feedback.hidden=false;$('outcomes').replaceChildren();
+    progress('Preparing to publish…',0,1);state();renderRows();feedback.scrollIntoView?.({behavior:'smooth',block:'nearest'});
+    const ticker=setInterval(elapsed,1000);
+    let acceptedTotal=0,verifiedTotal=0,attempted=0;
     try {
-      // Refuse to overwrite a configuration that changed after the reviewed scan.
-      const checked = await transport.batch(unique([...SEEDS,...existingUrls()]).slice(0,40), url => transport.query(url,{authors:[pub],kinds:KINDS,limit:20},ioOptions()));
+      // Catch missing selections before relay refreshes or encryption prompts.
+      if(!restored) {
+        if(!enabled().length)throw Error('Choose at least one role to change.');
+        for(const role of enabled()) {
+          const selected=rows.filter(row=>row[role]);
+          if(!selected.length)throw Error(`${LABELS[role]} is checked, but no relay is selected. Select a relay in the table, or uncheck ${LABELS[role]} to leave it unchanged.`);
+          for(const row of selected)if(!roleEligibility(row,role).eligible)throw Error(`${LABELS[role]}: ${roleEligibility(row,role).reason}`);
+        }
+      }
+      const refreshTargets=unique([...SEEDS,...existingUrls()]).slice(0,40);let refreshed=0;
+      progress(`Step 1/5 — Checking current configuration: 0/${refreshTargets.length} relays`,0,refreshTargets.length,'Slow relays time out; completed checks appear as they finish.');
+      const checked=await transport.batch(refreshTargets,async url=>{
+        const result=await transport.query(url,{authors:[pub],kinds:KINDS,limit:20},ioOptions(()=>{detail.textContent='Relay authentication needs a signature. Check your signer extension.'}));
+        progress(`Step 1/5 — Checking current configuration: ${++refreshed}/${refreshTargets.length} relays`,refreshed,refreshTargets.length);
+        log(`Configuration check ${url}: ${result.ok?'completed':result.reason}`);return result;
+      });
       if(!checked.some(result=>result.ok))throw Error('Could not refresh configuration from any relay. Analyze again when a relay is reachable.');
-      const latestLive = latestConfig([...Object.values(current),...checked.flatMap(result=>result.events)],pub);
-      if (Object.keys(latestLive).some(kind=>latestLive[kind].id!==current[kind]?.id)) {
+      const latestLive=latestConfig([...Object.values(current),...checked.flatMap(result=>result.events)],pub);
+      if(Object.keys(latestLive).some(kind=>latestLive[kind].id!==current[kind]?.id)) {
         current=latestLive;captureBaseline();showCurrent();renderComparison();throw Error('Configuration changed since your scan. Review the updated current lists and approve again.');
       }
+      progress('Step 2/5 — Preparing changes and backup…');
       let templates;
       if(restored)templates=restoreTemplates(restored,current,Object.keys(restored).map(Number),now());
       else {
-        const roles=enabled();if(!roles.length)throw Error('Choose at least one role');
-        // Validate every selected endpoint again at the signing boundary.
-        for(const role of roles)for(const row of rows.filter(row=>row[role]))if(!roleEligibility(row,role).eligible)throw Error(`${LABELS[role]}: ${roleEligibility(row,role).reason}`);
-        const options=roles.includes('private')?{privateContent:await encryptPrivate(rows.filter(row=>row.private).map(row=>row.url))}:{};
+        const roles=enabled();
+        const options=roles.includes('private')?{privateContent:await signerStep(()=>encryptPrivate(rows.filter(row=>row.private).map(row=>row.url)),'Encrypting your private relay list')}:{};
         templates=eventTemplates(rows,current,roles,now(),options);
       }
-      const privateEndpoints = unique([...privateBaseline,...$('private-urls').value.split(/\s+/)]);
-      for (const template of templates.filter(event=>event.kind!==10013)) {
-        if(template.tags.some(tag=>['r','relay'].includes(tag[0])&&privateEndpoints.includes(normalize(tag[1])))) throw Error('A private endpoint would appear in a public list. Review the restored or preserved tags.');
-      }
+      const privateEndpoints=unique([...privateBaseline,...$('private-urls').value.split(/\s+/)]);
+      for(const template of templates.filter(event=>event.kind!==10013))if(template.tags.some(tag=>['r','relay'].includes(tag[0])&&privateEndpoints.includes(normalize(tag[1]))))throw Error('A private endpoint would appear in a public list. Review the restored or preserved tags.');
       const description=templates.map(template=>template.kind).join(', ');
-      if(!confirm(`Replace configuration kinds ${description}${restored?' from your signed backup':''}? Your original archive will download first. Each kind can succeed or fail independently.`))return;
-      download(original??archiveFor(current,pub),'relaypilot-original-backup.json');
-      const signed=[];
-      for(const template of templates)signed.push(await sign(template));
-      download({format:'relaypilot-signed-updates-v1',pubkey:pub,events:signed},'relaypilot-signed-updates.json');
-      const old=existingUrls();
-      const newPublic=unique(signed.filter(event=>event.kind!==10013).flatMap(event=>event.tags.filter(t=>['r','relay'].includes(t[0])).map(t=>t[1])));
-      const targets=unique([...old,...newPublic,...SEEDS]);
-      const outcomes=[];
-      for(const event of signed){
-        const results=await transport.batch(targets,url=>transport.publish(url,event,{...ioOptions(),timeout:8000}));
-        // Read back exact IDs on accepting relays; ACKs alone are not storage proof.
-        const accepted=results.filter(result=>result.ok);
-        const checks=await transport.batch(accepted,urlResult=>transport.query(urlResult.url,{ids:[event.id],limit:1},ioOptions()));
-        const retrievable=new Set(checks.filter(result=>result.events.some(found=>found.id===event.id)).map(result=>result.url));
-        for(const result of results)outcomes.push(`${event.kind} ${result.url}: ${result.ok?(retrievable.has(result.url)?'accepted; read back verified':'accepted; read back not verified'):result.reason}`);
-        if(accepted.length){current[event.kind]=event;touchedKinds.add(event.kind);}
+      if(!confirm(`Replace configuration kinds ${description}${restored?' from your signed backup':''}? Your original archive will download first. Each kind can succeed or fail independently.`)) {
+        progress('Publishing canceled. No events were published.',1,1);say('Publishing canceled.');return;
       }
-      $('outcomes').textContent=outcomes.join('\n');showCurrent();
-      say('Publishing finished. Check each kind and relay below. Acceptance and immediate retrieval do not guarantee future retention.');
+      download(original??archiveFor(current,pub),'relaypilot-original-backup.json');log('Original backup download requested.');
+      const signed=[];
+      for(const template of templates) {
+        progress(`Step 3/5 — Signing ${signed.length+1}/${templates.length}: ${kindLabel(template.kind)}`,signed.length,templates.length,extension?'Check your signer extension for approval.':'Signing locally…');
+        signed.push(await signerStep(()=>sign(template),`Signing ${kindLabel(template.kind)}`));log(`Signed ${kindLabel(template.kind)}.`);
+      }
+      download({format:'relaypilot-signed-updates-v1',pubkey:pub,events:signed},'relaypilot-signed-updates.json');log('Signed updates download requested.');
+      const targets=unique([...existingUrls(),...unique(signed.filter(event=>event.kind!==10013).flatMap(event=>event.tags.filter(t=>['r','relay'].includes(t[0])).map(t=>t[1]))),...SEEDS]);
+      for(let index=0;index<signed.length;index++) {
+        const event=signed[index];let completed=0;
+        const publishStatus=()=>`Step 4/5 — Publishing ${kindLabel(event.kind)} (${index+1}/${signed.length} lists): ${completed}/${targets.length} relays`;
+        progress(publishStatus(),0,targets.length,'Each relay has an 8-second timeout. Other relay results continue to appear below.');
+        const results=await transport.batch(targets,async url=>{
+          const result=await transport.publish(url,event,{...ioOptions(()=>{detail.textContent='Relay authentication needs a signature. Check your signer extension.'}),timeout:8000});
+          attempted++;completed++;if(result.ok)acceptedTotal++;
+          log(`${event.kind} ${url}: ${result.ok?'accepted; checking retrieval next':result.reason}`);
+          progress(publishStatus(),completed,targets.length,`${acceptedTotal} accepted relay writes so far.`);
+          // Keep state accurate even if a later operation stops after a partial publication.
+          if(result.ok){current[event.kind]=event;touchedKinds.add(event.kind)}
+          return result;
+        });
+        const accepted=results.filter(result=>result.ok);let checkedCount=0;
+        progress(`Step 5/5 — Verifying ${kindLabel(event.kind)}: 0/${accepted.length} accepting relays`,0,accepted.length);
+        await transport.batch(accepted,async result=>{
+          const check=await transport.query(result.url,{ids:[event.id],limit:1},ioOptions(()=>{detail.textContent='Retrieval authentication needs a signature. Check your signer extension.'}));
+          const verified=check.events.some(found=>found.id===event.id);if(verified)verifiedTotal++;
+          log(`${event.kind} ${result.url}: ${verified?'read back verified':'accepted; read back not verified'+(check.ok?'':` (${check.reason})`)}`);
+          progress(`Step 5/5 — Verifying ${kindLabel(event.kind)}: ${++checkedCount}/${accepted.length} accepting relays`,checkedCount,accepted.length);
+        });
+      }
+      showCurrent();
+      const summary=`Publishing finished: ${acceptedTotal}/${attempted} relay writes accepted; ${verifiedTotal} read backs verified.`;
+      progress(summary,1,1,'Review individual relay results below. Acceptance and immediate retrieval do not guarantee future retention.');say(summary);
       restored=null;preview();
-    }catch(error){say('Publishing stopped: '+error.message)}
-    finally{busy=false;invalidate();state();renderRows()}
+    }catch(error){
+      const message='Publishing stopped: '+error.message;
+      progress(message,0,1,acceptedTotal?`${acceptedTotal} relay writes were already accepted. Review results before retrying; a partial change may be live.`:'No relay writes were accepted in this attempt.');
+      log(message);say(message);showCurrent();
+    }finally{clearInterval(ticker);elapsed();busy=false;publishing=false;invalidate();state();renderRows()}
   }
   $('extension').onclick=async()=>{
     if(busy)return;busy=true;state();

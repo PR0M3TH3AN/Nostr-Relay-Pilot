@@ -63,8 +63,14 @@
   <p id="restore-status" class="muted">Backups restore the configuration kinds they contain; a newly created list that was absent from a backup is not automatically removed. Backups contain signed configuration events, including encrypted private lists, and no secret keys. Keep your original backup somewhere safe.</p>
   <label class="check"><input type="checkbox" id="approve"> I reviewed the changes and want to replace the selected configuration lists.</label>
   <button id="publish" disabled>Sign &amp; publish selected roles</button>
+  <div id="publish-feedback" class="publish-feedback" hidden aria-busy="false">
+    <p id="publish-status" role="status" aria-live="polite"></p>
+    <progress id="publish-progress" max="1" value="0" aria-label="Current publishing step"></progress>
+    <p id="publish-detail" class="muted"></p>
+    <p id="publish-elapsed" class="muted" aria-live="off"></p>
+  </div>
   <p class="muted">Publishing first downloads the original archive and all signed updates. Each list publishes separately, so partial success is possible. Rollback imports the original signed backup and re-signs its contents with a newer timestamp. Importing a backup alone makes no network changes.</p>
   <div id="outcomes" role="status"></div>
 </section>
-<footer>RelayPilot / v0.2 • Static site • No telemetry • NIP-07 / 11 / 17 / 37 / 42 / 44 / 50 / 51 / 65 / 66</footer>
+<footer>RelayPilot / v0.2.1 • Static site • No telemetry • NIP-07 / 11 / 17 / 37 / 42 / 44 / 50 / 51 / 65 / 66</footer>
 </main><script type="module" src="/src/main.js"></script></body></html>

@@ -1,4 +1,4 @@
-# RelayPilot 0.2
+# RelayPilot 0.2.1
 
 Local-first Nostr relay configuration utility. Static delivery, no backend or analytics. Node.js 22+ is required for development.
 
@@ -39,7 +39,7 @@ NIP-42 authentication is opt-in. A challenge alone never triggers a signature: a
 2. Review current versus proposed counts, query latency, reachability and distinct sampled follow coverage. Fewer relays can reduce coverage. A single scan does not measure historical uptime or prove durable storage.
 3. Download the original backup and comparison before changing anything. Backups include signed configuration events and encrypted private-list content, with no secret keys.
 4. Choose which roles to change, review the proposal, approve and sign. The application refreshes metadata and refuses stale approval if a newer configuration is found. It downloads the original archive and signed updates before publishing.
-5. Inspect per-kind/per-relay outcomes. Acceptance and immediate readback are reported separately. Publishing several kinds is not atomic; one kind may succeed while another fails.
+5. Follow the progress panel beside the publish button: configuration checks, backup preparation, signer approval, relay publication and retrieval verification. It shows elapsed time and streams individual relay results immediately. A signer request times out after 60 seconds; late completion cannot resume a stopped attempt. Inspect per-kind/per-relay outcomes. Acceptance and immediate readback are reported separately. Publishing several kinds is not atomic; one kind may succeed while another fails.
 6. For rollback, analyze the current state, import your original backup, review and sign. Restored events preserve archived tags/content and use newer timestamps. Import alone publishes nothing. The importer verifies signatures and identity, including legacy single-kind-10002 backups. Only kinds present in an archive are restored; newly created lists absent from that archive remain unchanged.
 
 Discovery cannot prove that the newest metadata was found everywhere. Add known relays before analysis. The original archive is retained in this tab across publishing and later scans; keep its downloaded copy before closing the page. It backs up published relay configuration, not private keys, messages, client-local preferences or your entire note history.

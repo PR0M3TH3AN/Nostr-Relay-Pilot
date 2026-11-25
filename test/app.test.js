@@ -137,3 +137,62 @@ test('finishing restore refreshes the displayed proposal before a new approval',
   assert.deepEqual(proposal['Public inbox'],f.app.getState().rows.filter(r=>r.read).map(r=>r.url));
   assert.equal(f.$('approve').checked,false);f.key.fill(0);
 });
+
+test('publishing shows refresh progress immediately and catches missing roles before network work',async()=>{
+  const f=setup();f.app.connectKey(nip19.nsecEncode(f.key));await f.app.analyze();
+  const queries=f.queries.length;f.$('manage-private').checked=true;f.$('approve').checked=true;
+  await f.app.publishPlan();
+  assert.equal(f.queries.length,queries);assert.equal(f.writes.length,0);
+  assert.equal(f.$('publish-feedback').hidden,false);
+  assert.match(f.$('publish-status').textContent,/Private storage is checked, but no relay is selected/);
+  assert.match(f.$('publish-status').textContent,/uncheck Private storage/);
+  assert.equal(f.$('publish').textContent,'Sign & publish selected roles');
+  assert.equal(f.$('publish-feedback').getAttribute('aria-busy'),'false');f.key.fill(0);
+});
+
+test('pending signer is visible and successful relay results appear before slower relays finish',async()=>{
+  const f=setup({extension:true});await f.$('extension').onclick();await f.app.analyze();
+  let signRelease;const signGate=new Promise(resolve=>{signRelease=resolve});
+  const originalSigner=f.win.nostr.signEvent;
+  f.win.nostr.signEvent=async template=>{await signGate;return originalSigner(template)};
+  let slowRelease;const slowGate=new Promise(resolve=>{slowRelease=resolve});
+  const originalPublish=f.transport.publish;
+  f.transport.publish=async(url,event)=>{if(url.includes('other.example.org'))await slowGate;return originalPublish(url,event)};
+  f.$('approve').checked=true;const pending=f.app.publishPlan();
+  // Flush async metadata work without allowing the controlled signer to finish.
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.match(f.$('publish-status').textContent,/Step 3\/5.*Signing/);
+  assert.match(f.$('publish-detail').textContent,/signer extension/);
+  assert.equal(f.$('publish').textContent,'Publishing…');
+  assert.equal(f.$('publish-feedback').getAttribute('aria-busy'),'true');assert.equal(f.writes.length,0);
+  signRelease();await new Promise(resolve=>setImmediate(resolve));
+  assert.match(f.$('publish-status').textContent,/Step 4\/5.*Publishing/);
+  assert.match(f.$('outcomes').textContent,/accepted; checking retrieval next/);
+  assert.ok(f.writes.length>0);assert.equal(f.app.getState().busy,true);
+  slowRelease();await pending;
+  assert.match(f.$('publish-status').textContent,/Publishing finished: .*relay writes accepted/);
+  assert.match(f.$('publish-status').textContent,/read backs verified/);
+  assert.equal(f.$('publish-feedback').getAttribute('aria-busy'),'false');f.key.fill(0);
+});
+
+test('signer rejection appears beside the publish button and restores usable controls',async()=>{
+  const f=setup({extension:true});await f.$('extension').onclick();await f.app.analyze();
+  f.win.nostr.signEvent=async()=>{throw Error('User rejected signing')};
+  f.$('approve').checked=true;await f.app.publishPlan();
+  assert.match(f.$('publish-status').textContent,/User rejected signing/);
+  assert.equal(f.writes.length,0);assert.equal(f.app.getState().busy,false);
+  assert.equal(f.$('scan').disabled,false);assert.equal(f.$('approve').checked,false);f.key.fill(0);
+});
+
+test('a stalled signer times out and a late signature cannot publish after the attempt stops',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
+  const f=setup({extension:true});await f.$('extension').onclick();await f.app.analyze();
+  let release;const gate=new Promise(resolve=>{release=resolve});const signer=f.win.nostr.signEvent;
+  f.win.nostr.signEvent=async template=>{await gate;return signer(template)};
+  f.$('approve').checked=true;const pending=f.app.publishPlan();
+  await new Promise(resolve=>setImmediate(resolve));assert.match(f.$('publish-status').textContent,/Signing/);
+  t.mock.timers.tick(60000);await pending;
+  assert.match(f.$('publish-status').textContent,/Signer did not respond within 60 seconds/);
+  assert.equal(f.app.getState().busy,false);assert.equal(f.writes.length,0);
+  release();await new Promise(resolve=>setImmediate(resolve));assert.equal(f.writes.length,0);f.key.fill(0);
+});
