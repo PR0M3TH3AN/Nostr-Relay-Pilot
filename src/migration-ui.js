@@ -5,6 +5,7 @@ export function createMigrationUI({doc,identity,transport,ioOptions,download,ref
   const $=id=>doc.getElementById(id);
   let sources=[],targets=[],targetEventId=null,collection=null,delivery=null,controller=null,running=false;
   const publicKey=()=>identity().pub;
+  const method=result=>result.strategy==='nip77'?'NIP-77':result.fallbackReason?'NIP-01 fallback':'NIP-01';
   function update() {
     const locked=isBusy();
     $('migration-file').disabled=locked||!publicKey();
@@ -28,7 +29,7 @@ export function createMigrationUI({doc,identity,transport,ioOptions,download,ref
     $('migration-source-results').replaceChildren();
     for(const source of collection?.sourceResults??[]) {
       const tr=doc.createElement('tr');
-      for(const value of [source.url,String(source.collected??0),source.complete?'Explicitly complete':(source.reasons??[source.reason??'Incomplete']).join('; ')]){const td=doc.createElement('td');td.textContent=value;tr.append(td)}
+      for(const value of [source.url,method(source)+(source.fallbackReason?' — '+source.fallbackReason:''),String(source.collected??0),source.complete?'Inventory complete; records fetched':(source.reasons??[source.reason??'Incomplete']).join('; ')]){const td=doc.createElement('td');td.textContent=value;tr.append(td)}
       $('migration-source-results').append(tr);
     }
     if(!collection){$('migration-preview').textContent=`${sources.length} source relays; ${targets.length} current outbox targets. Collect notes to preview the transfer.`;return;}
@@ -39,7 +40,7 @@ export function createMigrationUI({doc,identity,transport,ioOptions,download,ref
     $('migration-results').replaceChildren();
     for(const result of delivery?.targets??[]) {
       const tr=doc.createElement('tr');
-      for(const text of [result.url,`${result.verified.length}/${delivery.eventCount}`,String(result.missing.length),String(result.rejected.length)]) {const td=doc.createElement('td');td.textContent=text;tr.append(td)}
+      for(const text of [result.url,method(result)+(result.fallbackReason?' — '+result.fallbackReason:''),`${result.verified.length}/${delivery.eventCount}`,String(result.missing.length),String(result.rejected.length)]) {const td=doc.createElement('td');td.textContent=text;tr.append(td)}
       $('migration-results').append(tr);
     }
   }
@@ -60,6 +61,10 @@ export function createMigrationUI({doc,identity,transport,ioOptions,download,ref
   }
   const onProgress=progress=>{
     if(controller?.signal.aborted)return;
+    if(progress.phase==='reconcile'){
+      show(`NIP-77 reconciliation — ${progress.url}: round ${progress.rounds??0}; ${progress.need??0} remote-only IDs, ${progress.have??0} local-only IDs`);
+      $('migration-progress').removeAttribute('value');return;
+    }
     const count=progress.completed??progress.attempted??progress.verified??progress.events??0;
     const fallback=progress.phase==='collect'?`Collecting ${progress.events??0} signed events — ${progress.pages??0} pages checked`:`${progress.phase??'Working'}: ${count}/${progress.total??'?'} events${progress.url?' — '+progress.url:''}`;
     show(progress.message??fallback,count,progress.total??Math.max(1,count));
@@ -87,7 +92,7 @@ export function createMigrationUI({doc,identity,transport,ioOptions,download,ref
     if(!sources.length||!targets.length)return;
     return operation(async signal=>{
       changed();collection=null;show('Collecting your signed public notes from the old relays…');
-      collection=await collectNotes({sources:[...sources],pubkey:publicKey(),kinds:$('migration-articles').checked?[1,30023]:[1],query:transport.query,signal,onProgress,ioOptions:ioOptions()});
+      collection=await collectNotes({sources:[...sources],pubkey:publicKey(),kinds:$('migration-articles').checked?[1,30023]:[1],query:transport.query,reconcile:transport.reconcileRelay,signal,onProgress,ioOptions:ioOptions()});
       preview();show(`${collection.cancelled?'Collection stopped':'Collection finished'}: ${collection.events.length} eligible events. ${collection.complete?'Sources reported complete results.':'Source completeness is not proven.'}`);
     });
   }
@@ -107,7 +112,7 @@ export function createMigrationUI({doc,identity,transport,ioOptions,download,ref
       download(exportArchive(),'relaypilot-collected-notes.json');
       $('migration-approve').checked=false;delivery=null;$('migration-results').replaceChildren();
       show(`Copying and verifying ${collection.events.length} events on ${targets.length} targets…`);
-      delivery=await runMigration({events:collection.events,targets:[...targets],pubkey:publicKey(),query:transport.query,publish:transport.publish,signal,onProgress,ioOptions:ioOptions()});
+      delivery=await runMigration({events:collection.events,targets:[...targets],pubkey:publicKey(),query:transport.query,publish:transport.publish,reconcile:transport.reconcileRelay,signal,onProgress,ioOptions:ioOptions()});
       showDelivery();
       const verified=delivery.targets.reduce((sum,target)=>sum+target.verified.length,0);
       const total=delivery.eventCount*delivery.targets.length;

@@ -208,3 +208,108 @@ test('aborted source responses retain already received valid events without star
   assert.deepEqual(result.events.map(e=>e.id),[event.id]);
   assert.equal(result.cancelled,true);assert.equal(result.complete,false);assert.equal(queries,1);
 });
+
+
+const reconciled=(have=[],need=[])=>({ok:true,complete:true,have,need,reason:'Complete',rounds:2,bytes:300,protocol:'nip77'});
+
+test('NIP77 source inventory fetches only needed signed IDs, including identical timestamps',async()=>{
+  const events=[note(10,'same a'),note(10,'same b'),note(10,'same c')],queries=[];
+  const result=await collect(async(_u,filter)=>{queries.push(filter);return complete(events.filter(e=>filter.ids?.includes(e.id)))},{reconcile:async(url,records,filter)=>{assert.equal(url,source);assert.deepEqual(records,[]);assert(filter.kinds.includes(5));return reconciled([],events.map(e=>e.id))}});
+  assert.equal(result.complete,true);assert.equal(result.events.length,3);
+  assert.equal(result.sourceResults[0].strategy,'nip77');assert.equal(result.sourceResults[0].reconciliation.needCount,3);
+  assert.equal(queries.length,1);assert.deepEqual(new Set(queries[0].ids),new Set(events.map(e=>e.id)));
+});
+
+test('NIP77 sources reuse previously verified local IDs without downloading them again',async()=>{
+  const first=note(10),second=note(11);const calls=[];let sessions=0;
+  const result=await collect(async(url,filter)=>{calls.push({url,filter});return complete([first,second].filter(e=>filter.ids?.includes(e.id)))},{sources:[source,target],reconcile:async(url,records)=>{sessions++;if(url===source)return reconciled([],[first.id]);assert.deepEqual(records,[{id:first.id,created_at:first.created_at}]);return reconciled([],[second.id])}});
+  assert.equal(sessions,2);assert.equal(result.events.length,2);assert.equal(result.complete,true);
+  assert.deepEqual(calls[1].filter.ids,[second.id]);assert.equal(result.sourceResults[1].collected,2);
+});
+
+test('NIP77 source collection includes deletion records and still honors deletion requests',async()=>{
+  const erased=note(10),deletion=sign(5,11,'',[['e',erased.id]]),kept=note(12);
+  const raw=[erased,deletion,kept];
+  const result=await collect(relayQuery(raw),{reconcile:async()=>reconciled([],raw.map(e=>e.id))});
+  assert.deepEqual(result.events.map(e=>e.id),[kept.id]);assert.equal(result.deletionCount,1);assert.equal(result.complete,true);
+});
+
+test('NIP77 unsupported or failed sessions fall back to bounded NIP01 collection',async()=>{
+  const event=note(10);let queries=0;
+  const result=await collect(async(u,f)=>{queries++;return relayQuery([event])(u,f)},{reconcile:async()=>({ok:false,complete:false,have:[],need:[],reason:'Unsupported NEG-OPEN'})});
+  assert.deepEqual(result.events.map(e=>e.id),[event.id]);assert.equal(queries,1);
+  assert.equal(result.complete,true);assert.equal(result.sourceResults[0].strategy,'nip01');assert(result.sourceResults[0].fallbackReason.includes('Unsupported'));
+});
+
+test('missing or invalid NIP77 bulk fetch IDs prevent completeness despite successful pagination fallback',async()=>{
+  const good=note(10),missing=note(11);let calls=0;
+  const result=await collect(async(u,f)=>{calls++;if(f.ids)return complete([good,{...missing,content:'tampered'}]);return relayQuery([good])(u,f)},{reconcile:async()=>reconciled([],[good.id,missing.id])});
+  assert.deepEqual(result.events.map(e=>e.id),[good.id]);assert.equal(result.complete,false);
+  assert.equal(result.sourceResults[0].strategy,'nip01');assert(result.sourceResults[0].fallbackReason.includes('fully fetched'));
+  assert.equal(calls,2);
+});
+
+test('NIP77 source results cannot inject unrequested IDs, private kinds or foreign signatures',async()=>{
+  const requested=note(10),unrequested=note(11),config=list;
+  const result=await collect(async(_u,f)=>f.ids?complete([requested,unrequested,config]):complete([requested]),{reconcile:async()=>reconciled([],[requested.id])});
+  assert.deepEqual(result.events.map(e=>e.id),[requested.id]);assert.equal(result.complete,true);assert.equal(result.skipped.length,2);
+});
+
+test('NIP77 fetches obey global byte, event and query limits',async()=>{
+  const events=[note(10),note(11)];
+  const capped=await collect(relayQuery(events),{maxEvents:1,reconcile:async()=>reconciled([],events.map(e=>e.id))});
+  assert.equal(capped.events.length,1);assert.equal(capped.complete,false);assert.equal(capped.limitReached,true);
+  const pageCap=await collect(relayQuery(events),{maxPages:1,reconcile:async()=>reconciled([],events.map(e=>e.id))});
+  assert.equal(pageCap.events.length,0);assert.equal(pageCap.pages,1);assert.equal(pageCap.complete,false);
+});
+
+test('aborted NIP77 source negotiation performs no fetch or fallback',async()=>{
+  const controller=new AbortController();let queries=0;
+  const result=await collect(async()=>{queries++;return complete([])},{signal:controller.signal,reconcile:async()=>{controller.abort();return {ok:false,complete:false,aborted:true,reason:'Cancelled'}}});
+  assert.equal(result.cancelled,true);assert.equal(result.complete,false);assert.equal(queries,0);
+});
+
+test('invalid NIP77 differences fall back rather than accepting foreign local IDs',async()=>{
+  const event=note(10),unknown=note(11);
+  const result=await collect(relayQuery([event]),{reconcile:async()=>reconciled([unknown.id],[event.id])});
+  assert.equal(result.sourceResults[0].strategy,'nip01');assert.equal(result.events.length,1);
+});
+
+test('NIP77 targets inventory claimed-present IDs, write only missing, then verify every ID',async()=>{
+  const existing=note(10),missing=note(11),extra=note(12);const queries=[],writes=[];let written=false;
+  const result=await migrate([existing,missing],async(_u,f)=>{queries.push(f);return complete([existing,...(written?[missing]:[])].filter(e=>f.ids.includes(e.id)))},async(_u,e)=>{writes.push(e.id);written=true;return {ok:true}},{reconcile:async(_u,records,filter)=>{assert.equal(records.length,2);assert.equal(filter.ids,undefined);assert.deepEqual(filter.kinds,[1]);return reconciled([missing.id],[extra.id])}});
+  assert.equal(result.allDelivered,true);assert.equal(result.targets[0].strategy,'nip77');
+  assert.deepEqual(writes,[missing.id]);assert.deepEqual(queries[0].ids,[existing.id]);
+  assert.deepEqual(new Set(queries.at(-1).ids),new Set([existing.id,missing.id]));
+});
+
+test('a lying NIP77 present fingerprint never proves delivery or skips a missing event without readback',async()=>{
+  const event=note(10);let writes=0;
+  const result=await migrate([event],async()=>complete([]),async()=>{writes++;return {ok:true}},{reconcile:async()=>reconciled([],[])});
+  assert.equal(writes,1);assert.equal(result.allDelivered,false);assert.deepEqual(result.targets[0].missing,[event.id]);
+});
+
+test('NIP77 target unsupported sessions use legacy inventory and still verify all IDs',async()=>{
+  const event=note(10);let reads=0;
+  const result=await migrate([event],async()=>{reads++;return complete([event])},async()=>{throw Error('must not publish')},{reconcile:async()=>({ok:false,complete:false,reason:'NIP77 unavailable'})});
+  assert.equal(result.allDelivered,true);assert.equal(reads,2);assert.equal(result.targets[0].strategy,'nip01');assert(result.targets[0].fallbackReason.includes('unavailable'));
+});
+
+test('aborted NIP77 target negotiation starts no fallback read or publish',async()=>{
+  const controller=new AbortController();let calls=0;const transport=async()=>{calls++;return complete([])};
+  const result=await migrate([note(10)],transport,transport,{signal:controller.signal,reconcile:async()=>{controller.abort();return {ok:false,complete:false,aborted:true}}});
+  assert.equal(result.cancelled,true);assert.equal(result.allDelivered,false);assert.equal(calls,0);
+});
+
+test('cancellation from reconciliation progress prevents opening that session',async()=>{
+  const controller=new AbortController();let sessions=0;
+  const result=await collect(async()=>complete([]),{signal:controller.signal,onProgress:()=>controller.abort(),reconcile:async()=>{sessions++;return reconciled([],[])}});
+  assert.equal(sessions,0);assert.equal(result.cancelled,true);
+});
+
+
+test('source reconciliation allows retained local inventory past half the global event capacity',async()=>{
+  const events=Array.from({length:6},(_,i)=>note(10+i));let sessions=0;
+  const result=await collect(relayQuery(events),{sources:[source,target],maxEvents:10,reconcile:async(_u,records,_filter,options)=>{sessions++;assert(options.maxIds>=records.length);return sessions===1?reconciled([],events.map(e=>e.id)):reconciled([],[])}});
+  assert.equal(result.complete,true);assert.equal(result.events.length,6);assert.equal(result.sourceResults[1].strategy,'nip77');
+});

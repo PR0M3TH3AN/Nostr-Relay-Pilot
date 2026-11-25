@@ -72,6 +72,20 @@ function hintsFor(result) {
 
 const aborted = (signal, error) => signal?.aborted || error?.name === 'AbortError';
 function progress(callback, detail) { try { callback?.(detail); } catch { /* Progress presentation cannot affect migration correctness. */ } }
+function reconciliationInfo(result) {
+  return { protocol: 'nip77', ok: !!result?.ok, complete: !!result?.complete, rounds: Number(result?.rounds) || 0, bytes: Number(result?.bytes) || 0, haveCount: Array.isArray(result?.have) ? result.have.length : 0, needCount: Array.isArray(result?.need) ? result.need.length : 0, reason: brief(result?.reason ?? '') };
+}
+
+function checkedDifference(result, localIds, maximum) {
+  if (!result?.ok || !result.complete || result.aborted || result.authRequired || result.truncated || hintsFor(result).has('auth')) return null;
+  if (!Array.isArray(result.have) || !Array.isArray(result.need) || result.have.length + result.need.length > maximum) return null;
+  const have = new Set(result.have), need = new Set(result.need);
+  if (have.size !== result.have.length || need.size !== result.need.length) return null;
+  if ([...have, ...need].some(id => typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id))) return null;
+  if ([...have].some(id => !localIds.has(id)) || [...need].some(id => localIds.has(id) || have.has(id))) return null;
+  return { have, need };
+}
+
 function coordinate(event) { return `${event.kind}:${event.pubkey}:${event.tags.find(tag => tag[0] === 'd')?.[1] ?? ''}`; }
 
 /** Apply public-only migration rules after collecting all available deletion requests. */
@@ -117,9 +131,10 @@ function selectPublic(records, pubkey, kinds, now) {
 /**
  * Bounded historical scan. A short page is never considered an end-of-history signal.
  * Exact-timestamp boundary queries prevent silently skipping peers with the same time.
- * Only NIP-67 finish hints can qualify a source scan as complete.
+ * NIP-77 reconciled inventory with verified fetches, or NIP-67 finish hints on
+ * pagination, can qualify a source scan as complete for the declared snapshot.
  */
-export async function collectNotes({ sources, pubkey, kinds = [1, 30023], query, signal,
+export async function collectNotes({ sources, pubkey, kinds = [1, 30023], query, reconcile, signal,
   onProgress, now = unix(), ioOptions = {}, ...options }) {
   if (!validPubkey(pubkey) || typeof query !== 'function') throw Error('A public key and relay query function are required.');
   if (!Array.isArray(kinds) || !kinds.length || kinds.some(kind => !MIGRATION_KINDS.includes(kind))) throw Error('Only supported public note kinds may be migrated.');
@@ -129,7 +144,7 @@ export async function collectNotes({ sources, pubkey, kinds = [1, 30023], query,
   let pages = 0, bytes = 0, cancelled = !!signal?.aborted, limitReached = false;
 
   for (const url of urls) {
-    const source = { url, pages: 0, collected: 0, complete: false, reasons: [], hints: [] };
+    const source = { url, pages: 0, collected: 0, complete: false, reasons: [], hints: [], strategy: 'nip01', fallbackReason: null, reconciliation: null };
     sourceResults.push(source);
     if (cancelled || signal?.aborted) { cancelled = true; source.reasons.push('Cancelled before scanning this source'); source.reason = source.reasons[0]; continue; }
     let cursor = now, exhausted = false, uncertain = false;
@@ -161,7 +176,7 @@ export async function collectNotes({ sources, pubkey, kinds = [1, 30023], query,
       const events = [];
       for (const raw of Array.isArray(result?.events) ? result.events : []) {
         const event = verified(raw, pubkey);
-        if (!event || !filter.kinds.includes(event.kind) || event.created_at > filter.until || (filter.since !== undefined && event.created_at < filter.since)) {
+        if (!event || !filter.kinds.includes(event.kind) || event.created_at > filter.until || (filter.since !== undefined && event.created_at < filter.since) || (filter.ids && !filter.ids.includes(event.id))) {
           ignored.push({ id: brief(raw?.id), reason: 'Invalid or out-of-filter relay event' }); continue;
         }
         events.push(event);
@@ -173,12 +188,61 @@ export async function collectNotes({ sources, pubkey, kinds = [1, 30023], query,
         }
       }
       progress(onProgress, { phase: 'collect', url, pages, events: records.size, bytes, completed: records.size, total: limits.maxEvents, message: `Collecting ${records.size} signed records (scan limit ${limits.maxEvents}): ${pages} pages — ${url}` });
-      if (incomplete) return null;
+      if (signal?.aborted) cancelled = true;
+      if (incomplete || cancelled) return null;
       return { events, hints, truncated: !!result?.truncated };
     }
 
-    while (!cancelled && !limitReached) {
-      const filter = { authors: [pubkey], kinds: [...new Set([...kinds, 5])], until: cursor, limit: limits.pageSize };
+    const inventoryFilter = { authors: [pubkey], kinds: [...new Set([...kinds, 5])], until: now };
+    if (typeof reconcile === 'function' && !cancelled && !limitReached) {
+      if (pages >= limits.maxPages || records.size >= limits.maxEvents || bytes >= limits.maxBytes) {
+        limitReached = true; source.reasons.push('Global scan limit reached before reconciliation');
+      } else {
+        pages++; source.pages++;
+        const local = [...records.values()].filter(event => inventoryFilter.kinds.includes(event.kind) && event.created_at <= now);
+        const localIds = new Set(local.map(event => event.id));
+        let result;
+        progress(onProgress, { phase: 'collect', url, completed: records.size, total: limits.maxEvents, message: `Reconciling signed public-event inventory with ${url} using NIP-77` });
+        try {
+          if (signal?.aborted) { cancelled = true; result = { aborted: true, reason: 'Cancelled' }; }
+          else result = await reconcile(url, local.map(({ id, created_at }) => ({ id, created_at })), inventoryFilter, { ...ioOptions, signal, maxIds: limits.maxEvents, maxRounds: Math.max(1, Math.min(64, limits.maxPages - pages)), onProgress });
+        } catch (error) {
+          if (aborted(signal, error)) cancelled = true;
+          result = { ok: false, complete: false, reason: cancelled ? 'Cancelled' : brief(error?.message), aborted: cancelled };
+        }
+        source.reconciliation = reconciliationInfo(result);
+        if (signal?.aborted || result?.aborted) {
+          cancelled = true; source.reasons.push('Cancelled during NIP-77 reconciliation');
+        } else {
+          const difference = checkedDifference(result, localIds, limits.maxEvents);
+          if (difference) {
+            source.strategy = 'nip77';
+            for (const id of localIds) if (!difference.have.has(id)) seenAtSource.add(id);
+            source.collected = seenAtSource.size;
+            let fetchedAll = true;
+            const needed = [...difference.need];
+            for (let index = 0; index < needed.length && !cancelled && !limitReached; index += 100) {
+              const ids = needed.slice(index, index + 100);
+              const fetched = await page({ ...inventoryFilter, ids, limit: ids.length });
+              if (!fetched || fetched.truncated || fetched.hints.has('auth') || ids.some(id => !fetched.events.some(event => event.id === id))) { fetchedAll = false; break; }
+            }
+            if (fetchedAll && !cancelled && !limitReached && needed.every(id => seenAtSource.has(id))) {
+              exhausted = true;
+            } else if (!cancelled && !limitReached) {
+              source.strategy = 'nip01';
+              source.fallbackReason = 'NIP-77 inventory could not be fully fetched and verified; falling back to NIP-01 pagination';
+              source.reasons.push(source.fallbackReason); uncertain = true;
+            }
+          } else {
+            source.fallbackReason = 'NIP-77 unavailable or incomplete: ' + brief(result?.reason ?? 'Invalid or unbounded reconciliation difference');
+            if (result?.authRequired || hintsFor(result).has('auth')) uncertain = true;
+          }
+        }
+      }
+    }
+
+    while (!exhausted && !cancelled && !limitReached) {
+      const filter = { ...inventoryFilter, until: cursor, limit: limits.pageSize };
       const result = await page(filter);
       if (!result) break;
       if (result.hints.has('finish') && !result.hints.has('more') && !result.truncated) { exhausted = true; break; }
@@ -200,7 +264,7 @@ export async function collectNotes({ sources, pubkey, kinds = [1, 30023], query,
     source.complete = exhausted && !uncertain && !cancelled && !limitReached;
     if (!source.complete && !source.reasons.length) source.reasons.push(cancelled ? 'Cancelled' : 'Source completeness was not established');
     source.reasons = [...new Set(source.reasons)];
-    source.reason = source.complete ? 'NIP-67 confirmed all stored matching events were returned' : source.reasons.join('; ');
+    source.reason = source.complete ? source.strategy === 'nip77' ? 'NIP-77 reconciled inventory; every newly needed event was fetched and signature-verified' : 'NIP-67 confirmed all stored matching events were returned' : source.reasons.join('; ');
   }
   const selected = selectPublic([...records.values()], pubkey, kinds, now);
   return { ...selected, skipped: [...ignored, ...selected.skipped], sourceResults, complete: sourceResults.length > 0 && sourceResults.every(source => source.complete),
@@ -209,7 +273,7 @@ export async function collectNotes({ sources, pubkey, kinds = [1, 30023], query,
 }
 
 /** Copy original signed public events, then read every planned ID back on every target. */
-export async function runMigration({ events, targets, pubkey, query, publish, signal, onProgress,
+export async function runMigration({ events, targets, pubkey, query, publish, reconcile, signal, onProgress,
   ioOptions = {}, clock = unix, now = clock(), concurrency = 4 }) {
   if (!validPubkey(pubkey) || typeof query !== 'function' || typeof publish !== 'function' || !Array.isArray(events) || events.length > 100000) throw Error('Invalid migration plan or transport.');
   if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 4) throw Error('Migration concurrency must be between 1 and 4.');
@@ -217,7 +281,7 @@ export async function runMigration({ events, targets, pubkey, query, publish, si
   const urls = checkedUrls(targets, 'Targets');
   const selected = selectPublic(events, pubkey, MIGRATION_KINDS, now);
   const planned = selected.events;
-  const report = { eventCount: planned.length, skipped: selected.skipped, targets: urls.map(url => ({ url, verified: [], missing: [], rejected: [], errors: [], alreadyPresent: [], published: [] })),
+  const report = { eventCount: planned.length, skipped: selected.skipped, targets: urls.map(url => ({ url, verified: [], missing: [], rejected: [], errors: [], alreadyPresent: [], published: [], strategy: 'nip01', fallbackReason: null, reconciliation: null })),
     allDelivered: false, cancelled: !!signal?.aborted, startedAt: new Date().toISOString() };
   let nextTarget = 0;
 
@@ -240,12 +304,37 @@ export async function runMigration({ events, targets, pubkey, query, publish, si
         target.errors.push({ phase, reason: report.cancelled ? 'Cancelled' : brief(error?.message) });
       }
       progress(onProgress, { phase: phase === 'existing' ? 'inventory' : 'verify', url: target.url, completed: Math.min(i + chunk.length, items.length), total: items.length, verified: found.size, message: `${phase === 'existing' ? 'Checking existing' : 'Verifying'} ${Math.min(i + chunk.length, items.length)}/${items.length} IDs at ${target.url}; ${found.size} read back` });
+      if (signal?.aborted) report.cancelled = true;
     }
     return found;
   }
 
   async function migrateTarget(target) {
-    const existing = await readIds(target, planned, 'existing');
+    let inventoryItems = planned;
+    if (typeof reconcile === 'function' && planned.length && !report.cancelled && !signal?.aborted) {
+      const filter = { authors: [pubkey], kinds: [...new Set(planned.map(event => event.kind))], until: planned.reduce((latest, event) => Math.max(latest, event.created_at), 0) };
+      let result;
+      progress(onProgress, { phase: 'inventory', url: target.url, completed: 0, total: planned.length, message: `Reconciling target inventory at ${target.url} using NIP-77` });
+      try {
+        if (signal?.aborted) { report.cancelled = true; result = { aborted: true, reason: 'Cancelled' }; }
+        else result = await reconcile(target.url, planned.map(({ id, created_at }) => ({ id, created_at })), filter, { ...ioOptions, signal, maxIds: Math.min(100000, planned.length * 2 + 1000), onProgress });
+      } catch (error) {
+        if (aborted(signal, error)) report.cancelled = true;
+        result = { ok: false, complete: false, reason: report.cancelled ? 'Cancelled' : brief(error?.message), aborted: report.cancelled };
+      }
+      target.reconciliation = reconciliationInfo(result);
+      if (signal?.aborted || result?.aborted) report.cancelled = true;
+      else {
+        const difference = checkedDifference(result, new Set(planned.map(event => event.id)), 100000);
+        if (difference) {
+          target.strategy = 'nip77';
+          // Fingerprints are inventory hints, never proof of storage. Verify claimed-present
+          // IDs before skipping sends; the final readback still covers EVERY planned ID.
+          inventoryItems = planned.filter(event => !difference.have.has(event.id));
+        } else target.fallbackReason = 'NIP-77 unavailable or incomplete: ' + brief(result?.reason ?? 'Invalid reconciliation difference');
+      }
+    }
+    const existing = await readIds(target, inventoryItems, 'existing');
     target.alreadyPresent = [...existing];
     for (const event of planned) {
       if (report.cancelled || signal?.aborted) { report.cancelled = true; break; }

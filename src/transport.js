@@ -213,3 +213,6 @@ export async function batch(items, fn, n = 4) {
   for (let i = 0; i < items.length; i += n) result.push(...await Promise.all(items.slice(i, i + n).map(fn)));
   return result;
 }
+
+// NIP-77 is an optimization; callers retain NIP-01 fallbacks and signed readback.
+export { reconcileRelay } from './negentropy.js';

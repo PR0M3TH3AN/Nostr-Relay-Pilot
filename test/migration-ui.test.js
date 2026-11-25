@@ -66,3 +66,16 @@ test('stop cancels in-flight source queries and restores controls without publis
  assert.equal(f.ui.getState().running,false);assert.equal(f.writes.length,0);assert.equal(f.ui.getState().collection.cancelled,true);
  assert.match(f.$('migration-status').textContent,/stopped/);assert.equal(f.$('migration-stop').hidden,true);f.key.fill(0);
 });
+
+test('the migration UI passes NIP-77 to sources and targets and displays the actual sync method',async()=>{
+ const f=fixture();let reconciliations=0;
+ f.transport.reconcileRelay=async(url,records)=>{
+  reconciliations++;const local=new Set(records.map(event=>event.id));const remote=new Set(f.stores.get(url)?.keys()??[]);
+  return {ok:true,complete:true,have:[...local].filter(id=>!remote.has(id)),need:[...remote].filter(id=>!local.has(id)),rounds:1,bytes:100,protocol:'nip77'};
+ };
+ f.ui.importSourceBackup(f.backup);await f.ui.loadTargets();await f.ui.collect();
+ assert.ok(reconciliations>=2);assert.match(f.$('migration-source-results').textContent,/NIP-77/);
+ f.$('migration-approve').checked=true;await f.ui.copy();
+ assert.equal(f.ui.report().targets[0].strategy,'nip77');assert.match(f.$('migration-results').textContent,/NIP-77/);
+ assert.equal(f.ui.report().allDelivered,true);f.key.fill(0);
+});
