@@ -1,0 +1,5 @@
+import {test} from 'node:test';import assert from 'node:assert/strict';import {normalize,unique,latest,rank,tagsFor} from '../src/engine.js';
+test('relay URL validation',()=>{assert.equal(normalize('ws://example.com'),null);assert.equal(normalize('wss://127.0.0.1'),null);assert.equal(normalize('wss://foo.local'),null);assert.deepEqual(unique(['wss://example.com','wss://example.com/']),['wss://example.com/'])});
+test('newest event',()=>{assert.equal(latest([{kind:10002,pubkey:'a',created_at:1,id:'a'},{kind:10002,pubkey:'a',created_at:2,id:'b'}],10002,'a').id,'b')});
+test('rank excludes restrictions and duplicate domains',()=>{const r=(url,ms,restricted=false)=>({url,ms,ok:true,meta:{},restricted,follows:new Set(),total:0});assert.deepEqual(rank([r('wss://a.example.com',10),r('wss://b.example.com',20),r('wss://other.org',30),r('wss://restricted.org',1,true)]),['wss://a.example.com','wss://other.org'])});
+test('role encoding',()=>assert.deepEqual(tagsFor([{url:'a',read:true,write:true},{url:'b',read:true},{url:'c',write:true}]),[['r','a'],['r','b','read'],['r','c','write']]));
