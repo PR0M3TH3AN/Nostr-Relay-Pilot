@@ -140,6 +140,7 @@ test('finishing restore refreshes the displayed proposal before a new approval',
 
 test('publishing shows refresh progress immediately and catches missing roles before network work',async()=>{
   const f=setup();f.app.connectKey(nip19.nsecEncode(f.key));await f.app.analyze();
+  for(const row of f.app.getState().rows)row.private=false;
   const queries=f.queries.length;f.$('manage-private').checked=true;f.$('approve').checked=true;
   await f.app.publishPlan();
   assert.equal(f.queries.length,queries);assert.equal(f.writes.length,0);
@@ -195,4 +196,30 @@ test('a stalled signer times out and a late signature cannot publish after the a
   assert.match(f.$('publish-status').textContent,/Signer did not respond within 60 seconds/);
   assert.equal(f.app.getState().busy,false);assert.equal(f.writes.length,0);
   release();await new Promise(resolve=>setImmediate(resolve));assert.equal(f.writes.length,0);f.key.fill(0);
+});
+
+
+test('fresh users get a working encrypted-storage default without entering custom URLs',async()=>{
+  const f=setup({fresh:true});f.app.connectKey(nip19.nsecEncode(f.key));
+  assert.equal(f.$('private-urls').value,'wss://nos.lol/');assert.equal(f.$('trust-private').checked,true);
+  await f.app.analyze();
+  const candidate=f.app.getState().rows.find(row=>row.url==='wss://nos.lol/');
+  assert.equal(candidate.private,true);assert.match(f.$('private-health').textContent,/selected for encrypted storage/);
+  assert.equal(f.$('manage-private').checked,false);
+  f.$('manage-private').checked=true;f.$('approve').checked=true;await f.app.publishPlan();
+  const event=f.app.getState().current[10013];assert.ok(event);assert.deepEqual(event.tags,[]);
+  const conversation=nip44.v2.utils.getConversationKey(f.key,f.pub);
+  assert.deepEqual(JSON.parse(nip44.v2.decrypt(event.content,conversation)),[['relay','wss://nos.lol/']]);conversation.fill(0);
+  assert.match(f.$('publish-status').textContent,/Publishing finished/);f.key.fill(0);
+});
+
+test('unavailable default is not selected or silently substituted for an existing private list',async()=>{
+  const f=setup();const query=f.transport.query;
+  f.transport.query=async(url,filter)=>url==='wss://nos.lol/'&&filter.kinds?.[0]===31234?{url,ok:false,events:[],reason:'Timeout',ms:5500}:query(url,filter);
+  f.app.connectKey(nip19.nsecEncode(f.key));await f.app.analyze();
+  assert.equal(f.app.getState().rows.find(row=>row.url==='wss://nos.lol/').private,false);
+  assert.match(f.$('private-health').textContent,/did not pass/);
+  f.$('approve').checked=true;await f.app.publishPlan();
+  assert.equal(f.app.getState().current[10013].id,f.original.find(e=>e.kind===10013).id);
+  assert.ok(!f.writes.some(e=>e.kind===10013));f.key.fill(0);
 });

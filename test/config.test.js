@@ -222,3 +222,14 @@ test('private-list archive and rollback reject relay-bearing or unknown public t
     assert.throws(()=>restoreTemplates({10013:e},{},[10013],100),/not encrypted/);
   }
 });
+
+
+test('the known public encrypted-storage default can coexist with public relay roles',()=>{
+  const shared=row('wss://nos.lol/',{privateTrusted:true,read:true,write:true,private:true});
+  assert.equal(roleEligibility(shared,'read').eligible,true);
+  assert.equal(roleEligibility(shared,'private').eligible,true);
+  assert.match(roleEligibility(shared,'private').reason,/public relay/);
+  const templates=eventTemplates([shared],{},['read','write','private'],20,{privateContent:encryption(JSON.stringify([['relay',shared.url]]))});
+  assert.deepEqual(templates.find(e=>e.kind===10002).tags,[['r',shared.url]]);
+  assert.deepEqual(templates.find(e=>e.kind===10013).tags,[]);
+});

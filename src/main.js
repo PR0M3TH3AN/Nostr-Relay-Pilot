@@ -1,6 +1,6 @@
 import { nip19, nip44, getPublicKey, finalizeEvent, verifyEvent } from 'nostr-tools';
 import { normalize, unique, latest } from './engine.js';
-import { ROLES, KINDS, latestConfig, archiveFor, parseArchive, eventTemplates, restoreTemplates, roleEligibility, recommendRoles, comparison, configuredUrls } from './config.js';
+import { ROLES, KINDS, DEFAULT_PRIVATE_RELAY, isDedicatedPrivate, latestConfig, archiveFor, parseArchive, eventTemplates, restoreTemplates, roleEligibility, recommendRoles, comparison, configuredUrls } from './config.js';
 import * as liveTransport from './transport.js';
 
 export const SEEDS = unique(['wss://relay.damus.io','wss://nos.lol','wss://relay.primal.net','wss://purplepag.es','wss://relay.nostr.band']);
@@ -43,7 +43,9 @@ export function createApp({ doc = document, win = window, transport = liveTransp
     for (const id of ['key','extra','private-urls','restore-file']) $(id).value='';
     for (const id of ['identity','outcomes','sample','restore-status','comparison-note']) $(id).textContent='';
     for (const id of ['rows','metrics','comparison']) $(id).replaceChildren();
-    $('auth').checked=false; $('discover').checked=false; $('trust-private').checked=false;
+    $('auth').checked=false; $('discover').checked=false; $('trust-private').checked=true;
+    $('private-urls').value=DEFAULT_PRIVATE_RELAY;
+    $('private-health').textContent='';
     for (const role of ROLES) $(`manage-${role}`).checked = ['read','write'].includes(role);
     $('publish-feedback').hidden=true;
     $('current').textContent='Not loaded'; $('proposal').textContent='Run analysis first'; invalidate(); state();
@@ -82,7 +84,7 @@ export function createApp({ doc = document, win = window, transport = liveTransp
   }
   function measuredComparison(publicOnly=false) {
     const baseline=original?latestConfig(original.events,pub):current;
-    const source=publicOnly?rows.filter(row=>!row.privateTrusted):rows;
+    const source=publicOnly?rows.filter(row=>!isDedicatedPrivate(row)):rows;
     const selected=source.map(row=>({...row,...Object.fromEntries(ROLES.map(role=>[role,
       restored?configuredUrls(restored,role,[]).includes(row.url):enabled().includes(role)?row[role]:configuredUrls(current,role,privateBaseline).includes(row.url)
     ]))}));
@@ -117,7 +119,7 @@ export function createApp({ doc = document, win = window, transport = liveTransp
     $('rows').replaceChildren();
     for(const row of rows) {
       const tr=doc.createElement('tr');
-      const cell=doc.createElement('td');cell.textContent=row.privateTrusted?'Private endpoint (visible only in this tab)':row.url;
+      const cell=doc.createElement('td');cell.textContent=isDedicatedPrivate(row)?'Private endpoint (visible only in this tab)':row.url;
       const evidence=doc.createElement('small');evidence.className='evidence';
       evidence.textContent = `${row.notes.events.length} notes · ${row.mentions.events.length} mentions · ${row.own.events.length} own notes · ${row.dmProbe.ok?'DM query completed':'DM unverified'} · ${row.searchProbe.ok?row.searchProbe.events.length+' search matches':'search unverified'}${row.meta?'':' · metadata unavailable'}${row.restricted?' · restricted policy':''}`;
       cell.append(evidence);tr.append(cell);
@@ -133,7 +135,7 @@ export function createApp({ doc = document, win = window, transport = liveTransp
         const input=doc.createElement('input');input.type='checkbox';input.checked=!!row.eligibleConfirmed;input.disabled=busy||!!restored;input.setAttribute('aria-label',`I have paid or authorized access to ${row.url}`);input.title='I have the required account/payment/authorization; this does not prove write access.';
         input.onchange=()=>{row.eligibleConfirmed=input.checked;for(const role of ROLES)if(!roleEligibility(row,role).eligible)row[role]=false;renderRows();preview()};td.append(input);
       } else td.textContent='No declared gate';
-      if(!row.privateTrusted && row.dmProbe.ok && ![17,59].some(n=>row.meta?.supported_nips?.includes(n))) {
+      if(!isDedicatedPrivate(row) && row.dmProbe.ok && ![17,59].some(n=>row.meta?.supported_nips?.includes(n))) {
         const label=doc.createElement('label');label.className='evidence';
         const input=doc.createElement('input');input.type='checkbox';input.checked=!!row.dmManualConfirmed;input.disabled=busy||!!restored;input.setAttribute('aria-label',`I confirmed gift-wrap storage support at ${row.url}`);
         input.onchange=()=>{row.dmManualConfirmed=input.checked;if(!roleEligibility(row,'dm').eligible)row.dm=false;renderRows();preview()};
@@ -201,6 +203,8 @@ export function createApp({ doc = document, win = window, transport = liveTransp
         return {url,meta,restricted,eligibleConfirmed:false,privateTrusted:isPrivate,notes,mentions,own,dmProbe,searchProbe,privateProbe,ok:notes.ok||mentions.ok||dmProbe.ok||privateProbe.ok,ms:notes.ms??mentions.ms,follows:new Set(social.events.filter(event=>event.kind===1&&follows.includes(event.pubkey)).map(event=>event.pubkey)),total:follows.length,read:false,write:false,dm:false,search:false,private:false};
       });
       loaded=true;scanTime=new Date().toISOString();recommend();
+      const defaultRow=rows.find(row=>row.url===DEFAULT_PRIVATE_RELAY && row.privateTrusted);
+      $('private-health').textContent=defaultRow?(defaultRow.private?'nos.lol is selected for encrypted storage. Enable Private storage under the roles to change if you want to save it.':'The default storage relay did not pass its access and query checks. Your existing private list will stay unchanged unless you choose another eligible relay.') : '';
       say('Analysis complete. Review each role and its evidence; no configuration has changed.');
     } catch(error){say('Analysis failed: '+error.message)}
     finally{busy=false;renderRows();state()}
@@ -238,7 +242,7 @@ export function createApp({ doc = document, win = window, transport = liveTransp
     try{return nip44.v2.encrypt(plaintext,key)}finally{key.fill(0)}
   }
   function report() {
-    return {format:'relaypilot-comparison-v1',captured_at:scanTime,npub:nip19.npubEncode(pub),scope:'Single bounded public-relay measurement. No private endpoints or key material. No durable write/storage verification.',managedRoles:enabled(),sample:{sampled:follows.length,total:totalFollows},comparison:measuredComparison(true),rows:rows.filter(row=>!row.privateTrusted).map(row=>({url:row.url,ms:row.ms,policy:row.meta?.limitation??null,notes:row.notes.events.length,mentions:row.mentions.events.length,ownNotes:row.own.events.length,followCount:row.follows.size,dmQueryCompleted:row.dmProbe.ok,searchMatches:row.searchProbe.events.length,selected:Object.fromEntries(ROLES.filter(role=>role!=='private').map(role=>[role,!!row[role]]))}))};
+    return {format:'relaypilot-comparison-v1',captured_at:scanTime,npub:nip19.npubEncode(pub),scope:'Single bounded public-relay measurement. No private endpoints or key material. No durable write/storage verification.',managedRoles:enabled(),sample:{sampled:follows.length,total:totalFollows},comparison:measuredComparison(true),rows:rows.filter(row=>!isDedicatedPrivate(row)).map(row=>({url:row.url,ms:row.ms,policy:row.meta?.limitation??null,notes:row.notes.events.length,mentions:row.mentions.events.length,ownNotes:row.own.events.length,followCount:row.follows.size,dmQueryCompleted:row.dmProbe.ok,searchMatches:row.searchProbe.events.length,selected:Object.fromEntries(ROLES.filter(role=>role!=='private').map(role=>[role,!!row[role]]))}))};
   }
   async function publishPlan() {
     if(busy||!loaded||!canSign()||!$('approve').checked)return;
@@ -294,7 +298,8 @@ export function createApp({ doc = document, win = window, transport = liveTransp
         const options=roles.includes('private')?{privateContent:await signerStep(()=>encryptPrivate(rows.filter(row=>row.private).map(row=>row.url)),'Encrypting your private relay list')}:{};
         templates=eventTemplates(rows,current,roles,now(),options);
       }
-      const privateEndpoints=unique([...privateBaseline,...$('private-urls').value.split(/\s+/)]);
+      // The known public default URL is not a confidential private endpoint.
+      const privateEndpoints=unique([...privateBaseline,...$('private-urls').value.split(/\s+/)]).filter(url=>url!==DEFAULT_PRIVATE_RELAY);
       for(const template of templates.filter(event=>event.kind!==10013))if(template.tags.some(tag=>['r','relay'].includes(tag[0])&&privateEndpoints.includes(normalize(tag[1]))))throw Error('A private endpoint would appear in a public list. Review the restored or preserved tags.');
       const description=templates.map(template=>template.kind).join(', ');
       if(!confirm(`Replace configuration kinds ${description}${restored?' from your signed backup':''}? Your original archive will download first. Each kind can succeed or fail independently.`)) {

@@ -1,4 +1,4 @@
-# RelayPilot 0.2.1
+# RelayPilot 0.2.2
 
 Local-first Nostr relay configuration utility. Static delivery, no backend or analytics. Node.js 22+ is required for development.
 
@@ -21,11 +21,13 @@ Connect an npub for read-only analysis, or use a NIP-07 signer extension to publ
 | Outbox | NIP-65, kind 10002, `r` / `write` | Observed public notes; existing own-note availability, sampled follow coverage and latency |
 | DM inbox | NIP-17, kind 10050, `relay` | Completed gift-wrap recipient query plus declared NIP-17/59, or explicit user confirmation of gift-wrap storage support |
 | Search | NIP-51, kind 10007, `relay` | Declared NIP-50 and a completed search returning locally matching results |
-| Private storage | NIP-37/51, kind 10013 | Only user-trusted endpoints, completed private-draft query, encrypted list saved to self with NIP-44 |
+| Encrypted private storage | NIP-37/51, kind 10013 | Default `wss://nos.lol/`, or custom trusted endpoints; completed own-draft query; list encrypted to self with NIP-44 |
 
 Recommendations are measured candidates, not proof of an ideal setup. A relay can complete a query without storing the queried kind. DM declarations are conservative evidence: client-only NIPs need not appear in NIP-11. An empty query does not prove sender write acceptance. Public inbox is where others deliver mentions; client feed relay settings may be separate. Client support for these configuration lists varies.
 
-Only checked roles change. Changing inbox alone preserves existing outbox selections, and vice versa. Private endpoints are excluded from public lists and comparison exports. Existing encrypted private lists can be decrypted explicitly by the connected identity; they are not inferred from an npub.
+Only checked roles change. Changing inbox alone preserves existing outbox selections, and vice versa. Custom private endpoints are excluded from public lists and comparison exports. The known public default, nos.lol, can also serve public inbox/outbox roles. The no-setup default is nos.lol, a free public relay. Compatible clients encrypt private contents to your key with NIP-44, but authorship, timestamps and event metadata remain publicly queryable. This is an encrypted-storage default, not a promise of server-side access control, write acceptance or retention. For stronger metadata privacy, replace it with an authenticated custom endpoint. The default is prefilled and recommended only after access/query checks; the Private storage role remains opt-in and existing lists are preserved until approved publication.
+
+Existing encrypted private lists can be decrypted explicitly by the connected identity; they are not inferred from an npub.
 
 ## Access and discovery
 

@@ -24,9 +24,10 @@
 <section>
   <h2>02 — Discover &amp; measure</h2>
   <label>Additional trusted relay URLs (one per line)<textarea id="extra" rows="2" placeholder="wss://your-relay.example"></textarea></label>
-  <label>Private storage relays you control or explicitly trust<textarea id="private-urls" rows="2" placeholder="wss://private.your-domain.example"></textarea></label>
-  <div class="actions"><button id="private-load" class="secondary" disabled>Decrypt my existing private list</button><label class="check"><input type="checkbox" id="trust-private"> I trust the listed private storage endpoints and want to test them.</label></div>
-  <p class="muted">Private storage URLs are never discovered automatically or included in public relay lists. Listing a relay here confirms your trust, not its privacy. Confirm that its operator enforces access control. These URLs stay in this tab and are encrypted to you when saved.</p>
+  <label>Encrypted private storage<textarea id="private-urls" rows="2" placeholder="wss://nos.lol/">wss://nos.lol/</textarea></label>
+  <div class="actions"><button id="private-load" class="secondary" disabled>Decrypt my existing private list</button><label class="check"><input type="checkbox" id="trust-private" checked> Use the listed endpoints for encrypted storage.</label></div>
+  <p class="muted">Default: <strong>nos.lol</strong> — free encrypted storage with no server setup. Contents are encrypted to your key by compatible clients; the public relay can still expose your public key, timestamps and other event metadata. This is not an access-restricted private server. You can replace it with a custom authenticated relay above. Custom private endpoints are kept out of public relay lists and reports.</p>
+  <p id="private-health" class="muted" role="status"></p>
   <label class="check"><input type="checkbox" id="discover"> Include candidates from untrusted NIP-66 reports. Relay operators see your IP.</label>
   <label class="check"><input type="checkbox" id="auth"> Allow NIP-42 authentication when a relay requires it. This reveals your connected public key to that relay and may prompt your signer.</label>
   <div class="actions"><button id="scan" disabled>Analyze relays</button><select id="preset" aria-label="Recommendation preset"><option value="balanced">Balanced</option><option value="speed">Low latency</option><option value="social">Prioritize role evidence</option></select><button id="recommend" class="secondary" disabled>Recalculate</button></div>
@@ -47,7 +48,7 @@
   </div>
   <p class="muted">Only checked roles change. Public inbox = where others send mentions; outbox = where others find your posts. Your client's feed relay settings may be separate. Client support for DM, search and private lists varies.</p>
   <div class="scroll"><table><thead><tr><th>Role</th><th>Current → proposed</th><th>Reachable</th><th>Median query time</th><th>Sample follows seen</th></tr></thead><tbody id="comparison"></tbody></table></div>
-  <p class="muted">One bounded scan is a snapshot, not an uptime history or proof of an ideal setup. Follow coverage is context for public relays, not a delivery guarantee or an inbox-quality score. Private storage cannot be evaluated from an npub alone.</p>
+  <p class="muted">One bounded scan is a snapshot, not an uptime history or proof of an ideal setup. Follow coverage is context for public relays, not a delivery guarantee or an inbox-quality score. Private-list decryption requires your signer; an npub cannot reveal existing private endpoints.</p>
   <p id="comparison-note" class="warning" role="status"></p>
   <h3>Current signed configuration</h3><pre id="current">Not loaded</pre>
   <h3>Proposed changes</h3><pre id="proposal">Run analysis first</pre>
@@ -72,5 +73,5 @@
   <p class="muted">Publishing first downloads the original archive and all signed updates. Each list publishes separately, so partial success is possible. Rollback imports the original signed backup and re-signs its contents with a newer timestamp. Importing a backup alone makes no network changes.</p>
   <div id="outcomes" role="status"></div>
 </section>
-<footer>RelayPilot / v0.2.1 • Static site • No telemetry • NIP-07 / 11 / 17 / 37 / 42 / 44 / 50 / 51 / 65 / 66</footer>
+<footer>RelayPilot / v0.2.2 • Static site • No telemetry • NIP-07 / 11 / 17 / 37 / 42 / 44 / 50 / 51 / 65 / 66</footer>
 </main><script type="module" src="/src/main.js"></script></body></html>

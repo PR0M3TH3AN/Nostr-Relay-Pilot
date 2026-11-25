@@ -1,6 +1,10 @@
 import { verifyEvent } from 'nostr-tools';
 import { normalize } from './engine.js';
 
+// A public, no-setup host for NIP-44 ciphertext; not an access-restricted server.
+export const DEFAULT_PRIVATE_RELAY = 'wss://nos.lol/';
+export const isDedicatedPrivate = row => row.privateTrusted === true && normalize(row.url) !== DEFAULT_PRIVATE_RELAY;
+
 export const ROLES = ['read', 'write', 'dm', 'search', 'private'];
 export const KINDS = [10002, 10050, 10007, 10013];
 const ARCHIVE_FORMAT = 'relaypilot-config-archive-v1';
@@ -77,7 +81,7 @@ function selectedUrls(rows, role) {
   for (const row of rows.filter(r => r[role])) {
     const url = normalize(row.url);
     if (!url) throw Error(`Invalid relay URL selected for ${role}.`);
-    if (role !== 'private' && row.privateTrusted) throw Error('A trusted private relay cannot be published in a public list.');
+    if (role !== 'private' && isDedicatedPrivate(row)) throw Error('A trusted private relay cannot be published in a public list.');
     if (role === 'private' && !row.privateTrusted) throw Error('Private relays require explicit trust confirmation.');
     if (!roleEligibility(row, role).eligible) throw Error(`The selected ${role} relay has not passed its role and access checks.`);
     if (!urls.includes(url)) urls.push(url);
@@ -129,7 +133,7 @@ export function eventTemplates(rows, currentByKind, enabledRoles, now = Math.flo
     if (!isPrivateContent(privateContent)) throw Error('Encrypt the private relay list to yourself with NIP-44 before publishing.');
     templates.push({ kind: 10013, created_at: nextTime(currentByKind[10013], now), tags: [], content: privateContent });
   }
-  const privateUrls = new Set(rows.filter(row => row.privateTrusted).map(row => normalize(row.url)).filter(Boolean));
+  const privateUrls = new Set(rows.filter(isDedicatedPrivate).map(row => normalize(row.url)).filter(Boolean));
   for (const template of templates) {
     if (template.kind === 10013) continue;
     if (template.tags.some(tag => ['r', 'relay'].includes(tag[0]) && privateUrls.has(normalize(tag[1])))) throw Error('A trusted private relay cannot be published in a public list; remove it from all public roles first.');
@@ -151,7 +155,7 @@ export function restoreTemplates(backupByKind, currentByKind, enabledKinds = Obj
 export function roleEligibility(row, role) {
   if (!ROLES.includes(role)) return { eligible: false, reason: 'Unknown role' };
   if (!normalize(row.url)) return { eligible: false, reason: 'Invalid public WSS URL' };
-  if (row.privateTrusted && role !== 'private') return { eligible: false, reason: 'Private endpoints are excluded from every public relay list' };
+  if (isDedicatedPrivate(row) && role !== 'private') return { eligible: false, reason: 'Private endpoints are excluded from every public relay list' };
   const limits = row.meta?.limitation ?? {};
   const restricted = row.restricted || limits.auth_required || limits.payment_required || limits.restricted_writes || Number(limits.min_pow_difficulty) > 0;
   if (restricted && !(row.eligibleConfirmed || row.eligible)) return { eligible: false, reason: 'Confirm existing access or paid membership first' };
@@ -160,7 +164,7 @@ export function roleEligibility(row, role) {
   if (role === 'write') return { eligible: !!(row.notes?.ok ?? row.ok) && (countEvents(row.notes) > 0 || Number(row.noteCount) > 0), reason: 'Public notes must be observed; write acceptance is proven only when publishing' };
   if (role === 'dm') return { eligible: ([17, 59].some(n => row.meta.supported_nips?.includes(n)) || row.dmManualConfirmed === true) && !!(row.dmProbe?.ok ?? row.dmOk), reason: 'Requires declared NIP-17/59 support or explicit manual confirmation, plus a completed gift-wrap query; storage and sender acceptance are unproven' };
   if (role === 'search') return { eligible: !!row.meta.supported_nips?.includes(50) && !!(row.searchProbe?.ok ?? row.searchOk) && (countEvents(row.searchProbe) > 0 || Number(row.searchMatches) > 0) && row.searchProbe?.matched !== false, reason: 'Requires declared NIP-50 and matching search results' };
-  return { eligible: row.privateTrusted === true && !!row.privateProbe?.ok, reason: 'Only explicitly trusted private endpoints with a completed probe qualify' };
+  return { eligible: row.privateTrusted === true && !!row.privateProbe?.ok, reason: normalize(row.url) === DEFAULT_PRIVATE_RELAY ? 'Default encrypted storage on a public relay; metadata is visible, private access control is not provided' : 'Only explicitly trusted private endpoints with a completed probe qualify' };
 }
 
 function domain(url) { return new URL(url).hostname.split('.').slice(-2).join('.'); }
