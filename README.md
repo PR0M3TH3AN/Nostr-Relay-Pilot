@@ -1,6 +1,6 @@
-# RelayPilot 0.1
+# RelayPilot 0.2
 
-Local-first Nostr relay configuration utility. No backend, analytics or remote application scripts. Requires Node.js 22+ and npm internet access for dependency installation.
+Local-first Nostr relay configuration utility. Static delivery, no backend or analytics. Node.js 22+ is required for development.
 
 Live site: https://pr0m3th3an.github.io/Nostr-Relay-Pilot/
 
@@ -11,19 +11,42 @@ npm ci
 npm run dev
 ```
 
-Open the localhost URL printed by Vite (normally http://127.0.0.1:5173). Enable your NIP-07 extension on that origin, or connect using an nsec or npub. Prefer an extension; test with a disposable identity first. Never enter a real nsec in an untrusted deployment. JavaScript cannot guarantee complete erasure of key material from memory. The app does not deliberately persist keys. Disconnect or close the page when finished.
+Connect an npub for read-only analysis, or use a NIP-07 signer extension to publish. Local nsec signing is supported for disposable tests; prefer an extension for your real identity. The application does not deliberately persist keys. JavaScript cannot guarantee complete erasure of key material from memory.
 
-## Workflow
+## Separate relay roles
 
-1. Connect an identity. npub is read-only.
-2. Add trusted relay URLs if needed. Optional NIP-66 discovery contacts unknown relay operators; enable only if comfortable with that. Browser DNS cannot guarantee public-only endpoints, even with URL filtering. Relays see your IP and may see the public keys in queries.
-3. Analyze the current kind 10002 list and a sample of up to 100 follows, test query completion and fetch NIP-11 documents where CORS permits.
-4. Choose a scoring preset and manually adjust read/write checkboxes. The suggested list uses a greedy combination of latency and sampled coverage with approximate hostname diversity. It starts with the same inbox and outbox relays; independent manual selections are supported. Coverage is not a complete audit or a guarantee of delivery. Monitor reports are not trusted attestations, and domain diversity is not proof of operator diversity.
-5. Download the old signed event as a backup, review the replacement tags, approve and sign. The new event is also downloaded. Relay acceptance is reported individually; it is not proof of durable storage. Existing metadata might not have been located, so add known relays before publishing. To restore, manually select the old relay URLs and roles, analyze, and publish a new replacement with a newer timestamp (replaying the old event is insufficient).
+| Role | Configuration | Recommendation evidence |
+| --- | --- | --- |
+| Public inbox | NIP-65, kind 10002, `r` / `read` | Completed mentions query and observed public notes; mentions count and latency |
+| Outbox | NIP-65, kind 10002, `r` / `write` | Observed public notes; existing own-note availability, sampled follow coverage and latency |
+| DM inbox | NIP-17, kind 10050, `relay` | Completed gift-wrap recipient query plus declared NIP-17/59, or explicit user confirmation of gift-wrap storage support |
+| Search | NIP-51, kind 10007, `relay` | Declared NIP-50 and a completed search returning locally matching results |
+| Private storage | NIP-37/51, kind 10013 | Only user-trusted endpoints, completed private-draft query, encrypted list saved to self with NIP-44 |
 
-NIP-42 authentication and paid relay onboarding are not implemented. Restricted and unknown-policy relays are excluded from automatic recommendations but may be manually selected if responsive. Write capability is not proven until publishing. No DM relay changes, historical migration, automatic configuration changes, NIP-46, or persistent monitoring in this MVP.
+Recommendations are measured candidates, not proof of an ideal setup. A relay can complete a query without storing the queried kind. DM declarations are conservative evidence: client-only NIPs need not appear in NIP-11. An empty query does not prove sender write acceptance. Public inbox is where others deliver mentions; client feed relay settings may be separate. Client support for these configuration lists varies.
 
-## Build / test
+Only checked roles change. Changing inbox alone preserves existing outbox selections, and vice versa. Private endpoints are excluded from public lists and comparison exports. Existing encrypted private lists can be decrypted explicitly by the connected identity; they are not inferred from an npub.
+
+## Access and discovery
+
+Optional NIP-66 discovery contacts unknown relay operators. Relays see your IP and the public keys included in queries. URL validation is conservative (public-looking WSS hostnames, no custom ports); browser DNS cannot guarantee public-only endpoints.
+
+NIP-42 authentication is opt-in. A challenge alone never triggers a signature: a request must actually be denied with `auth-required`. Each denied request may prompt the signer once. Queries and signing are bounded by request timeouts. Paid/restricted relays require confirmation of existing access. The app does not purchase membership, register accounts or solve proof of work. Metadata unavailable through CORS stays unknown rather than being treated as unrestricted.
+
+## Compare, archive and roll back
+
+1. Analyze the existing signed configuration and the first 100 published follows. Queries sample up to 300 recent follow notes per relay; this is not a complete social graph audit.
+2. Review current versus proposed counts, query latency, reachability and distinct sampled follow coverage. Fewer relays can reduce coverage. A single scan does not measure historical uptime or prove durable storage.
+3. Download the original backup and comparison before changing anything. Backups include signed configuration events and encrypted private-list content, with no secret keys.
+4. Choose which roles to change, review the proposal, approve and sign. The application refreshes metadata and refuses stale approval if a newer configuration is found. It downloads the original archive and signed updates before publishing.
+5. Inspect per-kind/per-relay outcomes. Acceptance and immediate readback are reported separately. Publishing several kinds is not atomic; one kind may succeed while another fails.
+6. For rollback, analyze the current state, import your original backup, review and sign. Restored events preserve archived tags/content and use newer timestamps. Import alone publishes nothing. The importer verifies signatures and identity, including legacy single-kind-10002 backups. Only kinds present in an archive are restored; newly created lists absent from that archive remain unchanged.
+
+Discovery cannot prove that the newest metadata was found everywhere. Add known relays before analysis. The original archive is retained in this tab across publishing and later scans; keep its downloaded copy before closing the page. It backs up published relay configuration, not private keys, messages, client-local preferences or your entire note history.
+
+Historical note migration/rebroadcast, NIP-46 and continuous monitoring are not implemented. Changing relay lists does not copy old notes.
+
+## Build and test
 
 ```sh
 npm test
@@ -31,11 +54,8 @@ npm run build
 npm run preview
 ```
 
-Deploy `dist/` to a trusted HTTPS static host if desired. Review source and dependencies before deployment; do not use third-party analytics or scripts with nsec entry. The development server is bound to loopback. No private key is needed for the unit tests.
+Tests generate disposable keys and use controlled relay/DOM fixtures. They cover role-specific evidence, authenticated request retries, signature filtering, encrypted private lists, full application publishing, partial failures, immutable signer validation, archive import and rollback. They do not assert live paid-relay membership or future retention.
 
-GitHub Pages deploys automatically after tests and the production build pass on
-`main`. Pull requests run the same checks without publishing. The workflow uploads
-only `dist/`; source files and dependencies are not included in the site artifact.
-Vite uses relative asset URLs so the app works under the repository's Pages path.
+GitHub Pages automatically tests, builds and deploys `dist/` after pushes to `main`. Pull requests run checks without publishing. Vite uses relative asset URLs for the repository Pages path. No third-party application scripts or analytics are loaded by the site.
 
-Protocol references: https://github.com/nostr-protocol/nips (01, 02, 07, 11, 65, 66).
+Protocol references: https://github.com/nostr-protocol/nips (01, 02, 07, 11, 17, 37, 42, 44, 50, 51, 65, 66).

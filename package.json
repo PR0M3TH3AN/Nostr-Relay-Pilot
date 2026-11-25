@@ -1,1 +1,19 @@
-{"name":"relaypilot","version":"0.1.0","private":true,"type":"module","scripts":{"dev":"vite --host 127.0.0.1","build":"vite build","preview":"vite preview --host 127.0.0.1","test":"node --test"},"dependencies":{"nostr-tools":"^2.10.4"},"devDependencies":{"vite":"^6.1.0"}}
+{
+  "name": "relaypilot",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "nostr-tools": "^2.10.4"
+  },
+  "devDependencies": {
+    "linkedom": "^0.18.15",
+    "vite": "^6.1.0"
+  }
+}

@@ -1,1 +1,70 @@
-<!doctype html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer"><title>RelayPilot</title></head><body><main><header><span class="brand">◉ RELAYPILOT</span><span class="muted">LOCAL-FIRST / NOSTR</span></header><h1>Find your ideal relays.</h1><p class="lead">Discover, benchmark and configure the relays that serve your identity.</p><section><h2>01 — Identity</h2><div class="actions"><button id="extension">Connect NIP-07</button><form id="keyform"><input id="key" type="password" placeholder="nsec1… or npub1…" autocomplete="off" spellcheck="false" required><button>Connect key</button></form><button id="logout" class="secondary" disabled>Disconnect</button></div><p class="muted">An npub enables read-only analysis. An nsec stays in memory only; an extension is safer. Never enter your key on an untrusted deployment.</p><p id="identity"></p></section><section><h2>02 — Discover & benchmark</h2><label>Additional trusted relay URLs (one per line)<textarea id="extra" rows="3" placeholder="wss://your-relay.example"></textarea></label><label class="check"><input type="checkbox" id="discover"> Include candidate URLs from untrusted NIP-66 reports (relays see your IP).</label><div class="actions"><button id="scan" disabled>Analyze relays</button><select id="preset"><option value="balanced">Balanced</option><option value="speed">Low latency</option><option value="social">Social coverage</option></select><button id="recommend" class="secondary" disabled>Recalculate</button></div><p id="status" role="status" aria-live="polite"></p><div id="metrics" class="metrics"></div><div class="scroll"><table><thead><tr><th>Relay</th><th>Query time</th><th>Follows seen</th><th>NIP-11 / policy</th><th>Read</th><th>Write</th></tr></thead><tbody id="rows"></tbody></table></div></section><section><h2>03 — Review & publish</h2><p class="muted">Read = public inbox; write = public outbox. Feed fetching is separate. A successful query does not prove write permission. Existing tags are replaced only after approval.</p><h3>Existing list</h3><pre id="current">Not loaded</pre><h3>Proposed list</h3><pre id="proposal">Run analysis first</pre><div class="actions"><button id="backup" class="secondary" disabled>Download backup</button><label class="check"><input type="checkbox" id="approve"> I approve replacing my NIP-65 list.</label><button id="publish" disabled>Sign & publish</button></div><div id="outcomes" role="status"></div></section><footer>RelayPilot / v0.1 • No backend • No telemetry • NIP-11 / 65 / 66</footer></main><script type="module" src="/src/main.js"></script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>RelayPilot</title>
+  <link rel="stylesheet" href="/src/style.css">
+</head>
+<body><main>
+<header><span class="brand">◉ RELAYPILOT</span><span class="muted">LOCAL-FIRST / NOSTR</span></header>
+<h1>The right relay for each role.</h1>
+<p class="lead">Measure, compare and configure your public inbox, outbox, DMs, search and private storage.</p>
+<section>
+  <h2>01 — Identity</h2>
+  <div class="actions">
+    <button id="extension">Connect NIP-07</button>
+    <form id="keyform"><input id="key" type="password" placeholder="nsec1… or npub1…" autocomplete="off" spellcheck="false" required aria-label="Nostr public or disposable private key"><button>Connect key</button></form>
+    <button id="logout" class="secondary" disabled>Disconnect</button>
+  </div>
+  <p class="muted">An npub is read-only. Prefer an extension for signing. An nsec stays in application memory; never enter one on an untrusted deployment.</p>
+  <p id="identity"></p>
+</section>
+<section>
+  <h2>02 — Discover &amp; measure</h2>
+  <label>Additional trusted relay URLs (one per line)<textarea id="extra" rows="2" placeholder="wss://your-relay.example"></textarea></label>
+  <label>Private storage relays you control or explicitly trust<textarea id="private-urls" rows="2" placeholder="wss://private.your-domain.example"></textarea></label>
+  <div class="actions"><button id="private-load" class="secondary" disabled>Decrypt my existing private list</button><label class="check"><input type="checkbox" id="trust-private"> I trust the listed private storage endpoints and want to test them.</label></div>
+  <p class="muted">Private storage URLs are never discovered automatically or included in public relay lists. Listing a relay here confirms your trust, not its privacy. Confirm that its operator enforces access control. These URLs stay in this tab and are encrypted to you when saved.</p>
+  <label class="check"><input type="checkbox" id="discover"> Include candidates from untrusted NIP-66 reports. Relay operators see your IP.</label>
+  <label class="check"><input type="checkbox" id="auth"> Allow NIP-42 authentication when a relay requires it. This reveals your connected public key to that relay and may prompt your signer.</label>
+  <div class="actions"><button id="scan" disabled>Analyze relays</button><select id="preset" aria-label="Recommendation preset"><option value="balanced">Balanced</option><option value="speed">Low latency</option><option value="social">Prioritize role evidence</option></select><button id="recommend" class="secondary" disabled>Recalculate</button></div>
+  <p id="status" role="status" aria-live="polite"></p>
+  <p id="sample" class="muted"></p>
+  <div id="metrics" class="metrics"></div>
+  <div class="scroll"><table><thead><tr><th>Relay / evidence</th><th>Query time</th><th>Follows seen</th><th>Public inbox</th><th>Outbox</th><th>DM inbox</th><th>Search</th><th>Private</th><th>Access</th></tr></thead><tbody id="rows"></tbody></table></div>
+  <p class="muted">Recommendations use separate evidence for each role. Inbox: mentions queries. Outbox: visible public notes. DM: declared NIP-17/59 support and a recipient query, or your explicit confirmation of gift-wrap storage support. Search: declared NIP-50 and matching results. Empty queries do not prove storage or write access. Paid/restricted relays need your access confirmation; no purchases or account creation happen here.</p>
+</section>
+<section>
+  <h2>03 — Compare &amp; choose what changes</h2>
+  <div id="manage" class="actions">
+    <label class="check"><input id="manage-read" type="checkbox" checked> Public inbox</label>
+    <label class="check"><input id="manage-write" type="checkbox" checked> Outbox</label>
+    <label class="check"><input id="manage-dm" type="checkbox"> DM inbox</label>
+    <label class="check"><input id="manage-search" type="checkbox"> Search</label>
+    <label class="check"><input id="manage-private" type="checkbox"> Private storage</label>
+  </div>
+  <p class="muted">Only checked roles change. Public inbox = where others send mentions; outbox = where others find your posts. Your client's feed relay settings may be separate. Client support for DM, search and private lists varies.</p>
+  <div class="scroll"><table><thead><tr><th>Role</th><th>Current → proposed</th><th>Reachable</th><th>Median query time</th><th>Sample follows seen</th></tr></thead><tbody id="comparison"></tbody></table></div>
+  <p class="muted">One bounded scan is a snapshot, not an uptime history or proof of an ideal setup. Follow coverage is context for public relays, not a delivery guarantee or an inbox-quality score. Private storage cannot be evaluated from an npub alone.</p>
+  <p id="comparison-note" class="warning" role="status"></p>
+  <h3>Current signed configuration</h3><pre id="current">Not loaded</pre>
+  <h3>Proposed changes</h3><pre id="proposal">Run analysis first</pre>
+</section>
+<section>
+  <h2>04 — Archive, publish &amp; roll back</h2>
+  <div class="actions">
+    <button id="backup" class="secondary" disabled>Download original backup</button>
+    <button id="report" class="secondary" disabled>Download comparison</button>
+    <label class="file-label">Import signed backup<input id="restore-file" type="file" accept=".json,application/json" disabled></label>
+    <button id="normal" class="secondary" hidden>Cancel restore</button>
+  </div>
+  <p id="restore-status" class="muted">Backups restore the configuration kinds they contain; a newly created list that was absent from a backup is not automatically removed. Backups contain signed configuration events, including encrypted private lists, and no secret keys. Keep your original backup somewhere safe.</p>
+  <label class="check"><input type="checkbox" id="approve"> I reviewed the changes and want to replace the selected configuration lists.</label>
+  <button id="publish" disabled>Sign &amp; publish selected roles</button>
+  <p class="muted">Publishing first downloads the original archive and all signed updates. Each list publishes separately, so partial success is possible. Rollback imports the original signed backup and re-signs its contents with a newer timestamp. Importing a backup alone makes no network changes.</p>
+  <div id="outcomes" role="status"></div>
+</section>
+<footer>RelayPilot / v0.2 • Static site • No telemetry • NIP-07 / 11 / 17 / 37 / 42 / 44 / 50 / 51 / 65 / 66</footer>
+</main><script type="module" src="/src/main.js"></script></body></html>
